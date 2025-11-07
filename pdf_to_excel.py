@@ -47,8 +47,8 @@ def convert_pdf_to_excel(pdf_path, output_path=None, pages='all'):
             lattice=True  # Better for tables with clear borders
         )
     except Exception as e:
-        print(f"Error extracting tables from PDF: {e}")
-        print("Trying alternative extraction method...")
+        print(f"Error extracting tables from PDF: {e}", file=sys.stderr)
+        print("Trying alternative extraction method...", file=sys.stderr)
         try:
             tables = tabula.read_pdf(
                 str(pdf_file),
@@ -59,7 +59,7 @@ def convert_pdf_to_excel(pdf_path, output_path=None, pages='all'):
         except Exception as e2:
             raise RuntimeError(f"Failed to extract tables from PDF: {e2}")
     
-    if not tables or len(tables) == 0:
+    if not tables:
         raise ValueError("No tables found in the PDF file")
     
     # Write tables to Excel
