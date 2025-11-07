@@ -31,10 +31,12 @@ class TrainerMatcher:
             self.trainer_stats[trainer]['races'] += 1
             self.trainer_stats[trainer]['dogs'].append(dog['dog_name'])
             
-            # Check if dog has winning form
+            # Check if dog has winning form (most recent position is 1)
             form = dog.get('form', '')
-            if form and form.split('-')[0] == '1':
-                self.trainer_stats[trainer]['wins'] += 1
+            if form:
+                recent_positions = form.split('-')
+                if recent_positions and recent_positions[0].strip() == '1':
+                    self.trainer_stats[trainer]['wins'] += 1
         
         # Calculate win rates
         for trainer in self.trainer_stats:

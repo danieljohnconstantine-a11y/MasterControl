@@ -108,20 +108,17 @@ def main():
     trainer_matcher = TrainerMatcher()
     trainer_stats = trainer_matcher.analyze_trainers(races)
     print(f"    Analyzed {len(trainer_stats)} trainers")
-    races = trainer_matcher.enhance_dogs_with_trainer_scores(races)
+    
+    # Build trainer score mapping
+    trainer_scores = {
+        trainer: trainer_matcher.get_trainer_score(trainer)
+        for trainer in trainer_stats
+    }
     
     # Step 5: Score features
     print("\n[5/6] Scoring features...")
     scorer = FeatureScorer()
-    scored_races = scorer.score_all(races)
-    
-    # Update total scores with trainer scores
-    for dog in scored_races:
-        if 'trainer_score' in dog:
-            dog['total_score'] = round(
-                dog.get('total_score', 0) + dog['trainer_score'], 2
-            )
-    
+    scored_races = scorer.score_all(races, trainer_scores)
     ranked_races = scorer.rank_dogs(scored_races)
     print(f"    Scored and ranked {len(ranked_races)} dogs")
     

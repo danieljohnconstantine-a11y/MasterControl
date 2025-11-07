@@ -23,6 +23,25 @@ class FeatureScorer:
             '-': 0    # No data
         }
     
+    def _get_position_score(self, position: str) -> int:
+        """
+        Get score for a single position.
+        
+        Args:
+            position: Position string (e.g., '1', '2', '3')
+            
+        Returns:
+            Position score
+        """
+        if position in self.form_scores:
+            return self.form_scores[position]
+        elif position.isdigit():
+            # Handle positions beyond 6
+            pos_num = int(position)
+            if pos_num <= 5:
+                return self.form_scores.get(str(pos_num), 0)
+        return 0
+    
     def score_form(self, form_string: str) -> float:
         """
         Score a dog's recent form.
@@ -44,22 +63,7 @@ class FeatureScorer:
         
         for pos in positions[:5]:  # Consider last 5 races
             pos_clean = pos.strip()
-            if pos_clean in self.form_scores:
-                score += self.form_scores[pos_clean] * weight
-            elif pos_clean.isdigit():
-                # Handle positions beyond 6
-                pos_num = int(pos_clean)
-                if pos_num == 1:
-                    score += 10 * weight
-                elif pos_num == 2:
-                    score += 7 * weight
-                elif pos_num == 3:
-                    score += 5 * weight
-                elif pos_num == 4:
-                    score += 3 * weight
-                elif pos_num == 5:
-                    score += 1 * weight
-            
+            score += self._get_position_score(pos_clean) * weight
             weight *= 0.8  # Decay weight for older races
         
         return round(score, 2)
@@ -124,12 +128,13 @@ class FeatureScorer:
         else:
             return 1
     
-    def score_dog(self, dog: Dict) -> Dict:
+    def score_dog(self, dog: Dict, trainer_score: float = 0.0) -> Dict:
         """
         Calculate total score for a dog.
         
         Args:
             dog: Dictionary containing dog data
+            trainer_score: Optional trainer score to include in total
             
         Returns:
             Dog dictionary with added scores
@@ -139,9 +144,9 @@ class FeatureScorer:
         age_score = self.score_age(dog.get('age', 0))
         weight_score = self.score_weight(dog.get('weight', 0))
         
-        total_score = form_score + trap_score + age_score + weight_score
+        total_score = form_score + trap_score + age_score + weight_score + trainer_score
         
-        return {
+        result = {
             **dog,
             'form_score': form_score,
             'trap_score': trap_score,
@@ -149,18 +154,30 @@ class FeatureScorer:
             'weight_score': weight_score,
             'total_score': round(total_score, 2)
         }
+        
+        if trainer_score > 0:
+            result['trainer_score'] = trainer_score
+        
+        return result
     
-    def score_all(self, dogs: List[Dict]) -> List[Dict]:
+    def score_all(self, dogs: List[Dict], trainer_scores: Dict[str, float] = None) -> List[Dict]:
         """
         Score all dogs in a list.
         
         Args:
             dogs: List of dog dictionaries
+            trainer_scores: Optional dict mapping trainer names to scores
             
         Returns:
             List of scored dog dictionaries
         """
-        return [self.score_dog(dog) for dog in dogs]
+        if trainer_scores is None:
+            trainer_scores = {}
+        
+        return [
+            self.score_dog(dog, trainer_scores.get(dog.get('trainer', ''), 0.0))
+            for dog in dogs
+        ]
     
     def rank_dogs(self, dogs: List[Dict]) -> List[Dict]:
         """
