@@ -1,0 +1,17 @@
+# Test files
+test_input.pdf
+test_input.xlsx
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+*.egg-info/
+dist/
+build/
