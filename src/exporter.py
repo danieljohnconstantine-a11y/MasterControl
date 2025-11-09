@@ -49,6 +49,21 @@ def export_ordered(df, output_dir):
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
     
+    # PRE-EXPORT VALIDATION: Check for missing critical columns
+    critical_cols = ['S2_1_Distance', 'S2_1_RaceTime', 'Speed_kmh']
+    missing_data_warning = False
+    
+    for col in critical_cols:
+        if col in df.columns:
+            nan_pct = (df[col].isna().sum() / len(df)) * 100
+            if nan_pct > 10:
+                print(f"[WARN] Column '{col}' has {nan_pct:.1f}% missing values (>10% threshold)")
+                missing_data_warning = True
+    
+    if missing_data_warning:
+        print("[WARN] Incomplete Section 2 detected. Consider reviewing parser logic.")
+        print("[INFO] Proceeding with export, but data quality may be compromised.")
+    
     # 1) Reorder columns
     priority_cols = ["Track", "RaceNumber", "Box", "DogName", "FinalScore", "Speed_kmh"]
     # Only include priority cols that exist

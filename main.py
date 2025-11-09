@@ -14,6 +14,88 @@ def extract_text_from_pdf(pdf_path):
             text += page.extract_text() + "\n"
     return text
 
+
+def validate_dataframe(df):
+    """
+    Comprehensive validation before export:
+    - Checks Section 2 field completeness
+    - Verifies no row duplication or merging
+    - Detects cell overflow issues
+    - Reports speed metric coverage
+    """
+    print("\n[VALIDATION] Running dataframe validation...")
+    
+    # 1. Check Section 2 fields (Distance and RaceTime)
+    s2_distance_col = "S2_1_Distance"
+    s2_racetime_col = "S2_1_RaceTime"
+    
+    if s2_distance_col in df.columns:
+        missing_distance = df[s2_distance_col].isna().sum()
+        pct_missing_distance = (missing_distance / len(df)) * 100
+        print(f"[VALIDATION] S2_1_Distance: {missing_distance}/{len(df)} missing ({pct_missing_distance:.1f}%)")
+        
+        if pct_missing_distance > 10:
+            print(f"[WARN] More than 10% of dogs missing Section 2 Distance!")
+    else:
+        print(f"[WARN] Column '{s2_distance_col}' not found in dataframe")
+    
+    if s2_racetime_col in df.columns:
+        missing_racetime = df[s2_racetime_col].isna().sum()
+        pct_missing_racetime = (missing_racetime / len(df)) * 100
+        print(f"[VALIDATION] S2_1_RaceTime: {missing_racetime}/{len(df)} missing ({pct_missing_racetime:.1f}%)")
+        
+        if pct_missing_racetime > 10:
+            print(f"[WARN] More than 10% of dogs missing Section 2 RaceTime!")
+    else:
+        print(f"[WARN] Column '{s2_racetime_col}' not found in dataframe")
+    
+    # 2. Check for duplicate rows (Track, RaceNumber, Box should be unique)
+    if all(col in df.columns for col in ["Track", "RaceNumber", "Box"]):
+        duplicates = df.duplicated(subset=["Track", "RaceNumber", "Box"], keep=False)
+        dup_count = duplicates.sum()
+        if dup_count > 0:
+            print(f"[ERROR] Found {dup_count} duplicate rows! Section 2 may not be properly flattened.")
+            dup_rows = df[duplicates][["Track", "RaceNumber", "Box", "DogName"]]
+            print("[ERROR] Duplicate entries:")
+            print(dup_rows.to_string(index=False))
+        else:
+            print(f"[OK] No duplicate rows found (Track/RaceNumber/Box combinations are unique)")
+    
+    # 3. Check for cell overflow (DogName too long)
+    if "DogName" in df.columns:
+        long_names = df[df["DogName"].str.len() > 50]
+        if len(long_names) > 0:
+            print(f"[WARN] Found {len(long_names)} dogs with names >50 chars (possible cell overflow):")
+            for idx, row in long_names.iterrows():
+                print(f"  - {row['DogName'][:60]}...")
+    
+    # 4. Check speed metric coverage
+    speed_cols = ["Speed_kmh", "EarlySpeed", "ClosingSpeed", "BestTime", "SpeedIndex"]
+    existing_speed_cols = [col for col in speed_cols if col in df.columns]
+    
+    if existing_speed_cols:
+        print(f"[VALIDATION] Speed metric coverage:")
+        for col in existing_speed_cols:
+            non_null = df[col].notna().sum()
+            pct_coverage = (non_null / len(df)) * 100
+            print(f"  - {col}: {non_null}/{len(df)} populated ({pct_coverage:.1f}%)")
+    
+    # 5. Verify dogs per race consistency
+    if all(col in df.columns for col in ["Track", "RaceNumber"]):
+        race_counts = df.groupby(["Track", "RaceNumber"]).size()
+        avg_dogs_per_race = race_counts.mean()
+        std_dogs_per_race = race_counts.std()
+        print(f"[VALIDATION] Dogs per race: avg={avg_dogs_per_race:.1f}, std={std_dogs_per_race:.2f}")
+        
+        # Flag races with unusual counts
+        unusual_races = race_counts[(race_counts < 4) | (race_counts > 10)]
+        if len(unusual_races) > 0:
+            print(f"[WARN] {len(unusual_races)} races with unusual dog counts:")
+            for (track, race), count in unusual_races.items():
+                print(f"  - {track} Race {race}: {count} dogs")
+    
+    print("[VALIDATION] Validation complete.\n")
+
 # Start pipeline (ASCII logging for Windows cp1252 compatibility)
 print("[INFO] Starting Greyhound Analytics")
 
@@ -46,7 +128,10 @@ for pdf_file in pdf_files:
 combined_df = pd.concat(all_dogs, ignore_index=True)
 print(f"[INFO] Total dogs parsed: {len(combined_df)}")
 
-# Validate output
+# Internal validation - detailed checks before export
+validate_dataframe(combined_df)
+
+# Validate output (from utils)
 validate_final_output(combined_df)
 
 # Save full parsed form (legacy)
