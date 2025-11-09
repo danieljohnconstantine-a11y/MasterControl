@@ -36,33 +36,73 @@ def _parse_time_to_seconds(val):
 def _extract_speed_from_line(line):
     """
     Extract Distance (m), RaceTime, and Sectionals (1-3) from one Section 2 line.
-    Return dict: {Distance, RaceTime, Sectional1, Sectional2, Sectional3}
+    Return dict: {Distance, RaceTime, Sectional1, Sectional2, Sectional3, Result, Speed_kmh}
     
-    Improved logic to handle:
+    Enhanced logic with regex capturing group for distance & time on same line:
+    - Matches "NNNm XX.XX" pattern to extract both distance and time together
     - Multiple distances on same line (take first valid)
+    - Validates distance range (200-800m for greyhounds)
+    - Computes Speed_kmh = (distance / time) * 3.6
     - Trainer names and other text that shouldn't be included
-    - Prize money and other non-speed data
     """
     text = " ".join(line.split())
     
-    # Distance: find ALL occurrences, then take the first valid one
-    # This handles cases like "320m 324m" where we want the first
-    distances = re.findall(r"(\d{3,4})\s*m\b", text)
-    distance = None
-    if distances:
-        # Take first distance, validate it's reasonable (200-800m typical for greyhounds)
-        first_dist = int(distances[0])
-        if 200 <= first_dist <= 800:
-            distance = first_dist
+    # Try to match distance & race time together using regex capturing group
+    # Pattern: "520m 30.20" or "520 m 30.20"
+    match = re.search(r"(?P<distance>\d{2,4})\s*m\s+(?P<time>\d{1,2}\.\d{2})", text)
     
-    # Race time: prefer the last time on the line (often the official)
-    times = re.findall(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", text)
-    race_time = times[-1] if times else None
+    distance = None
+    race_time = None
+    speed_kmh = None
+    
+    if match:
+        dist_val = int(match.group('distance'))
+        time_val = match.group('time')
+        
+        # Validate distance range (200-800m typical for greyhounds)
+        if 200 <= dist_val <= 800:
+            distance = dist_val
+            race_time = time_val
+            
+            # Compute speed_kmh = (distance / time) * 3.6
+            try:
+                time_seconds = _parse_time_to_seconds(time_val)
+                if time_seconds and time_seconds > 0:
+                    speed_kmh = (dist_val / time_seconds) * 3.6
+            except (ValueError, ZeroDivisionError):
+                pass
+    
+    # Fallback: find ALL occurrences separately if regex didn't match
+    if distance is None:
+        distances = re.findall(r"(\d{3,4})\s*m\b", text)
+        if distances:
+            first_dist = int(distances[0])
+            if 200 <= first_dist <= 800:
+                distance = first_dist
+    
+    # If we don't have race_time yet, find times
+    if race_time is None:
+        times = re.findall(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", text)
+        race_time = times[-1] if times else None
+        
+        # Try to compute speed if we have both now
+        if distance and race_time and not speed_kmh:
+            try:
+                time_seconds = _parse_time_to_seconds(race_time)
+                if time_seconds and time_seconds > 0:
+                    speed_kmh = (distance / time_seconds) * 3.6
+            except (ValueError, ZeroDivisionError):
+                pass
     
     # Sectionals: collect up to 3 earliest times (before final). Heuristic: first 1-3 are splits.
+    times = re.findall(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", text)
     sectionals = []
     for t in times[:-1][:3]:
         sectionals.append(t)
+    
+    # Extract result (1st, 2nd, 3rd, etc.)
+    result_match = re.search(r"(\d+(?:st|nd|rd|th))\s+of\s+\d+", text)
+    result = result_match.group(1) if result_match else None
     
     out = {
         "Distance": distance,
@@ -70,17 +110,19 @@ def _extract_speed_from_line(line):
         "Sectional1": sectionals[0] if len(sectionals) > 0 else None,
         "Sectional2": sectionals[1] if len(sectionals) > 1 else None,
         "Sectional3": sectionals[2] if len(sectionals) > 2 else None,
+        "Result": result,
+        "Speed_kmh": speed_kmh,
     }
     return out
 
 
 def _normalize_section2(dog_row, section2_list, max_items=5):
     """
-    Flatten Section 2 list into wide columns: S2_1_Distance, S2_1_RaceTime, S2_1_Sectional1, etc.
+    Flatten Section 2 list into wide columns: S2_1_Distance, S2_1_RaceTime, S2_1_Sectional1, S2_1_Result, etc.
     """
     for i in range(max_items):
         s2 = section2_list[i] if i < len(section2_list) else {}
-        for key in ["Distance", "RaceTime", "Sectional1", "Sectional2", "Sectional3"]:
+        for key in ["Distance", "RaceTime", "Sectional1", "Sectional2", "Sectional3", "Result"]:
             dog_row[f"S2_{i+1}_{key}"] = s2.get(key)
     dog_row["S2_Count"] = len(section2_list)
     return dog_row
@@ -374,18 +416,20 @@ _RUN_LINE = re.compile(
 def _extract_recent_runs(block: str):
     """
     Input: raw block of a dog's 'recent runs' section (Section 2).
-    Output: list of normalized dicts with Distance, RaceTime, Sectional1-3 (strings),
-            plus any other fields from the original regex.
+    Output: list of normalized dicts with Distance, RaceTime, Sectional1-3, Result, Speed_kmh
     
-    Enhanced validation:
-    - Filters out trainer names and non-race lines
-    - Ensures distance and time are present before including
-    - Prevents race header lines from being treated as runs
+    Enhanced validation with proper block isolation:
+    - Detects start/end markers: starts with "N. DOG_NAME", ends before next numbered header
+    - Only includes lines matching both distance (m) AND time (seconds)
+    - Ignores lines with "Trainer", "Grade", "Ongoing Winners", "Race No"
+    - Ensures each run entry becomes its own clean record
     - Validates distance ranges (200-800m for greyhounds)
+    - Returns structured dicts, not raw text strings
     """
     runs = []
     
     # Split on position markers like "1st of 8", "2nd of 6", etc.
+    # This identifies individual race entries
     candidates = re.split(r"(?=(?:\d{1,2}(?:st|nd|rd|th)\s+of\s+\d+))", block)
     
     for cand in candidates:
@@ -393,20 +437,44 @@ def _extract_recent_runs(block: str):
         if not cand:
             continue
         
-        # Skip if line looks like a race header (e.g., "Race No 12")
+        # Skip lines that are clearly not race results:
+        # - Race headers (e.g., "Race No 12")
         if re.search(r"\bRace\s+No\.?\s+\d+", cand, re.IGNORECASE):
             continue
         
-        # Only keep likely run lines (contain distance/time token)
-        if not (re.search(r"\b\d{3,4}\s*m\b", cand) and re.search(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", cand)):
+        # - Trainer information (starts with "Trainer:")
+        if re.search(r"^\s*Trainer\s*:", cand, re.IGNORECASE):
             continue
         
-        # Extract speed-related fields
+        # - Grade information lines
+        if re.search(r"^\s*Grade\s*:", cand, re.IGNORECASE):
+            continue
+        
+        # - Ongoing Winners lines
+        if re.search(r"\bOngoing\s+Winners\b", cand, re.IGNORECASE):
+            continue
+        
+        # - Lines that start with numbered dog headers (e.g., "1. FAST DOG")
+        if re.match(r"^\s*\d+\.\s+[A-Z][A-Z\s']+", cand):
+            continue
+        
+        # Only keep lines that have BOTH distance marker AND time marker
+        has_distance = re.search(r"\b\d{3,4}\s*m\b", cand)
+        has_time = re.search(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", cand)
+        
+        if not (has_distance and has_time):
+            continue
+        
+        # Extract speed-related fields with enhanced extraction
         speed_data = _extract_speed_from_line(cand)
         
         # Validate that we got at least distance and race time
         if speed_data.get("Distance") is None or speed_data.get("RaceTime") is None:
             continue  # Skip incomplete entries
+        
+        # Validate distance is in reasonable range
+        if not (200 <= speed_data["Distance"] <= 800):
+            continue
         
         # Also try to match the original regex pattern for additional fields
         m = _RUN_LINE.search(cand)
@@ -414,7 +482,7 @@ def _extract_recent_runs(block: str):
             d = m.groupdict()
             if d.get("prize"):
                 d["prize"] = d["prize"].replace(",", "")
-            # Merge speed data with original data
+            # Merge speed data with original data (speed data takes precedence)
             d.update(speed_data)
             runs.append(d)
         else:

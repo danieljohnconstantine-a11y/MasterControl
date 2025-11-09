@@ -39,6 +39,11 @@ def export_ordered(df, output_dir):
     """
     Export ordered and sorted DataFrame to both CSV and XLSX with formatting.
     
+    Enforces proper ordering & deduplication:
+    - Deduplicates rows by ["Track", "RaceNumber", "Box", "DogName"]
+    - Sorts strictly by Track → RaceNumber → Box
+    - Reorders columns with priority cols first
+    
     Args:
         df: DataFrame to export
         output_dir: Directory to save files
@@ -53,9 +58,11 @@ def export_ordered(df, output_dir):
     critical_cols = ['S2_1_Distance', 'S2_1_RaceTime', 'Speed_kmh']
     missing_data_warning = False
     
+    print("\n[VALIDATION] Pre-export checks...")
     for col in critical_cols:
         if col in df.columns:
             nan_pct = (df[col].isna().sum() / len(df)) * 100
+            print(f"[VALIDATION] {col}: {nan_pct:.1f}% missing")
             if nan_pct > 10:
                 print(f"[WARN] Column '{col}' has {nan_pct:.1f}% missing values (>10% threshold)")
                 missing_data_warning = True
@@ -64,14 +71,26 @@ def export_ordered(df, output_dir):
         print("[WARN] Incomplete Section 2 detected. Consider reviewing parser logic.")
         print("[INFO] Proceeding with export, but data quality may be compromised.")
     
-    # 1) Reorder columns
+    # DEDUPLICATION: Remove duplicate rows
+    dedup_cols = ["Track", "RaceNumber", "Box", "DogName"]
+    # Only use columns that exist
+    dedup_cols = [c for c in dedup_cols if c in df.columns]
+    
+    if dedup_cols:
+        initial_len = len(df)
+        df = df.drop_duplicates(subset=dedup_cols, keep='first')
+        duplicates_removed = initial_len - len(df)
+        if duplicates_removed > 0:
+            print(f"[INFO] Removed {duplicates_removed} duplicate rows")
+    
+    # 1) Reorder columns - priority cols first
     priority_cols = ["Track", "RaceNumber", "Box", "DogName", "FinalScore", "Speed_kmh"]
     # Only include priority cols that exist
     priority_cols = [c for c in priority_cols if c in df.columns]
     remaining = [c for c in df.columns if c not in priority_cols]
     df = df[priority_cols + remaining]
 
-    # 2) Sort by Track -> RaceNumber -> Box
+    # 2) Sort strictly by Track -> RaceNumber -> Box
     sort_cols = []
     if "Track" in df.columns:
         sort_cols.append("Track")
