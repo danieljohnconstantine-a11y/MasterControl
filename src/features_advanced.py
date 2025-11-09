@@ -70,6 +70,74 @@ def compute_trend(values):
     return slope
 
 
+# ==================== SPEED METRICS COMPUTATION ====================
+
+def _safe_div(a, b):
+    """Safe division returning None if invalid."""
+    try:
+        return a / b if a is not None and b and b != 0 else None
+    except (ZeroDivisionError, TypeError):
+        return None
+
+
+def _parse_time_to_seconds(val):
+    """Accept 'mm:ss.xx' or 'ss.xx' -> float seconds; return None if invalid."""
+    import re
+    if val is None:
+        return None
+    s = str(val).strip()
+    m = re.fullmatch(r"(\d+):(\d{2}\.\d{2})", s)
+    if m:
+        return int(m.group(1)) * 60 + float(m.group(2))
+    m = re.fullmatch(r"(\d{1,2}\.\d{2})", s)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def compute_speed_metrics(row):
+    """
+    Compute speed metrics from Section 2 (S2) fields.
+    Uses the first S2 record as primary race data.
+    
+    Args:
+        row: DataFrame row with S2_* columns
+    
+    Returns:
+        row: Updated row with computed speed metrics
+    """
+    # Use the first S2 record as primary
+    dist = row.get("S2_1_Distance")
+    best = row.get("S2_1_RaceTime")
+    s1 = row.get("S2_1_Sectional1")
+    s2 = row.get("S2_1_Sectional2")
+    s3 = row.get("S2_1_Sectional3")
+
+    dist_m = float(dist) if dist is not None and dist != "" else None
+    best_s = _parse_time_to_seconds(best) if best else None
+
+    s1_s = _parse_time_to_seconds(s1) if s1 else None
+    s2_s = _parse_time_to_seconds(s2) if s2 else None
+    s3_s = _parse_time_to_seconds(s3) if s3 else None
+
+    split_avg = None
+    parts = [x for x in [s1_s, s2_s, s3_s] if x is not None]
+    if parts:
+        split_avg = sum(parts) / len(parts)
+
+    speed_index = _safe_div(dist_m, best_s) if dist_m and best_s else None  # m/s
+    early_speed = _safe_div(dist_m * 0.25, s1_s) if dist_m and s1_s else None
+    closing_speed = _safe_div(dist_m * 0.25, s3_s) if dist_m and s3_s else None
+
+    row["BestTime"] = best_s
+    row["SplitAvg"] = split_avg
+    row["SpeedIndex"] = speed_index
+    row["EarlySpeed"] = early_speed
+    row["ClosingSpeed"] = closing_speed
+    
+    return row
+
+
 def extract_recent_runs_data(recent_runs_str, limit=10):
     """
     Parse RecentRuns string into structured data
@@ -184,7 +252,11 @@ def compute_advanced_features(df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    print("🧮 Computing advanced features...")
+    # ===== SPEED METRICS FROM SECTION 2 =====
+    # Apply speed metrics computation to each row
+    df = df.apply(compute_speed_metrics, axis=1)
+    
+    print("[INFO] Computing advanced features...")
     
     # Extract structured data from RecentRuns
     print("   Parsing race history...")

@@ -2,6 +2,7 @@ import pandas as pd
 import os
 
 def export_to_excel(dogs, output_path):
+    """Legacy export function - kept for compatibility"""
     # Flatten list fields
     for dog in dogs:
         dog["recent_positions"] = ", ".join(map(str, dog.get("recent_positions", [])))
@@ -27,14 +28,75 @@ def export_to_excel(dogs, output_path):
             if col not in dog:
                 dog[col] = None
 
-    # Audit: log any extra keys
-    for i, dog in enumerate(dogs):
-        extras = set(dog.keys()) - set(columns)
-        if extras:
-            print(f"WARNING: Extra keys in dog #{i} ({dog.get('DogsName', 'Unknown')}): {extras}")
-
     df = pd.DataFrame(dogs)[columns]
     filename = f"greyhound_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     filepath = os.path.join(output_path, filename)
     df.to_excel(filepath, index=False)
-    print(f"EXCEL SAVED: {filepath}")
+    print(f"[OK] EXCEL SAVED: {filepath}")
+
+
+def export_ordered(df, output_dir):
+    """
+    Export ordered and sorted DataFrame to both CSV and XLSX with formatting.
+    
+    Args:
+        df: DataFrame to export
+        output_dir: Directory to save files
+    
+    Returns:
+        tuple: (csv_path, xlsx_path)
+    """
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+    
+    # 1) Reorder columns
+    priority_cols = ["Track", "RaceNumber", "Box", "DogName", "FinalScore", "Speed_kmh"]
+    # Only include priority cols that exist
+    priority_cols = [c for c in priority_cols if c in df.columns]
+    remaining = [c for c in df.columns if c not in priority_cols]
+    df = df[priority_cols + remaining]
+
+    # 2) Sort by Track -> RaceNumber -> Box
+    sort_cols = []
+    if "Track" in df.columns:
+        sort_cols.append("Track")
+    if "RaceNumber" in df.columns:
+        sort_cols.append("RaceNumber")
+    if "Box" in df.columns:
+        sort_cols.append("Box")
+    
+    if sort_cols:
+        df = df.sort_values(by=sort_cols, ascending=[True] * len(sort_cols))
+
+    # 3) Save files
+    os.makedirs(output_dir, exist_ok=True)
+    csv_out = os.path.join(output_dir, "greyhound_comparison_ordered.csv")
+    xlsx_out = os.path.join(output_dir, "greyhound_comparison_ordered.xlsx")
+    df.to_csv(csv_out, index=False)
+    df.to_excel(xlsx_out, index=False, engine='openpyxl')
+
+    # 4) Excel formatting
+    try:
+        wb = load_workbook(xlsx_out)
+        ws = wb.active
+        ws.title = "Greyhounds"
+        ws.freeze_panes = "A2"
+        
+        for i, col_name in enumerate(df.columns, 1):
+            width = min(40, max(10, len(str(col_name)) + 2))
+            ws.column_dimensions[get_column_letter(i)].width = width
+            
+            # Apply number format to numeric columns
+            if col_name in df.columns and df[col_name].dtype.kind in "fi":
+                for row_idx in range(2, len(df) + 2):  # Skip header
+                    cell = ws[f"{get_column_letter(i)}{row_idx}"]
+                    cell.number_format = "0.00"
+        
+        wb.save(xlsx_out)
+    except Exception as e:
+        print(f"[WARN] Excel formatting failed: {e}")
+
+    print(f"[OK] Exported {len(df)} rows x {len(df.columns)} columns (ordered by Track/Race/Box)")
+    print(f"[FILES] {csv_out} | {xlsx_out}")
+
+    return csv_out, xlsx_out

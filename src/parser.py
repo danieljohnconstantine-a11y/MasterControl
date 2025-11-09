@@ -14,6 +14,66 @@
 import re
 import pandas as pd
 
+
+# =========================================
+# ======== SPEED EXTRACTION HELPERS =======
+# =========================================
+
+def _parse_time_to_seconds(val):
+    """Accept 'mm:ss.xx' or 'ss.xx' -> float seconds; return None if invalid."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    m = re.fullmatch(r"(\d+):(\d{2}\.\d{2})", s)
+    if m:
+        return int(m.group(1)) * 60 + float(m.group(2))
+    m = re.fullmatch(r"(\d{1,2}\.\d{2})", s)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def _extract_speed_from_line(line):
+    """
+    Extract Distance (m), RaceTime, and Sectionals (1-3) from one Section 2 line.
+    Return dict: {Distance, RaceTime, Sectional1, Sectional2, Sectional3}
+    """
+    text = " ".join(line.split())
+    # Distance first occurrence like "366m" or "457 m"
+    md = re.search(r"(\d{3,4})\s*m\b", text)
+    distance = int(md.group(1)) if md else None
+
+    # Race time: prefer the last time on the line (often the official)
+    times = re.findall(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", text)
+    race_time = times[-1] if times else None
+
+    # Sectionals: collect up to 3 earliest times (before final). Heuristic: first 1-3 are splits.
+    sectionals = []
+    for t in times[:-1][:3]:
+        sectionals.append(t)
+
+    out = {
+        "Distance": distance,
+        "RaceTime": race_time,
+        "Sectional1": sectionals[0] if len(sectionals) > 0 else None,
+        "Sectional2": sectionals[1] if len(sectionals) > 1 else None,
+        "Sectional3": sectionals[2] if len(sectionals) > 2 else None,
+    }
+    return out
+
+
+def _normalize_section2(dog_row, section2_list, max_items=5):
+    """
+    Flatten Section 2 list into wide columns: S2_1_Distance, S2_1_RaceTime, S2_1_Sectional1, etc.
+    """
+    for i in range(max_items):
+        s2 = section2_list[i] if i < len(section2_list) else {}
+        for key in ["Distance", "RaceTime", "Sectional1", "Sectional2", "Sectional3"]:
+            dog_row[f"S2_{i+1}_{key}"] = s2.get(key)
+    dog_row["S2_Count"] = len(section2_list)
+    return dog_row
+
+
 # ---------- Optional: fuzzy matcher (rapidfuzz). If unavailable, fall back gracefully ----------
 try:
     from rapidfuzz import fuzz
@@ -138,7 +198,7 @@ def parse_race_form(text: str) -> pd.DataFrame:
     # Phase 2: Section 2 enrichment
     df = _enrich_section2(df, text, debug=False)
 
-    print(f"✅ Parsed {len(df)} dogs (with {(df.get('Owner').notna().sum() if 'Owner' in df.columns else 0)} enriched).")
+    print(f"[OK] Parsed {len(df)} dogs (with {(df.get('Owner').notna().sum() if 'Owner' in df.columns else 0)} enriched).")
     return df
 
 
@@ -300,19 +360,36 @@ _RUN_LINE = re.compile(
 )
 
 def _extract_recent_runs(block: str):
+    """
+    Input: raw block of a dog's 'recent runs' section (Section 2).
+    Output: list of normalized dicts with Distance, RaceTime, Sectional1-3 (strings),
+            plus any other fields from the original regex.
+    """
     runs = []
     candidates = re.split(r"(?=(?:\d{1,2}(?:st|nd|rd|th)\s+of\s+\d+))", block)
     for cand in candidates:
         cand = cand.strip()
         if not cand:
             continue
-        m = _RUN_LINE.search(cand)
-        if not m:
+        # Only keep likely run lines (contain distance/time token)
+        if not (re.search(r"\b\d{3,4}\s*m\b", cand) and re.search(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\b", cand)):
             continue
-        d = m.groupdict()
-        if d.get("prize"):
-            d["prize"] = d["prize"].replace(",", "")
-        runs.append(d)
+        
+        # Extract speed-related fields
+        speed_data = _extract_speed_from_line(cand)
+        
+        # Also try to match the original regex pattern for additional fields
+        m = _RUN_LINE.search(cand)
+        if m:
+            d = m.groupdict()
+            if d.get("prize"):
+                d["prize"] = d["prize"].replace(",", "")
+            # Merge speed data with original data
+            d.update(speed_data)
+            runs.append(d)
+        else:
+            # If regex doesn't match, at least save the speed data
+            runs.append(speed_data)
     return runs
 
 def _extract_fields(block: str):
@@ -426,13 +503,24 @@ def _enrich_section2(df: pd.DataFrame, full_text: str, debug: bool = False) -> p
 
         fields = _extract_fields(block)
 
-        # Write back fields
+        # Write back fields (except RecentRuns, which we'll normalize separately)
         for k, v in fields.items():
             if k == "RecentRuns":
-                if v:
-                    df.at[idx, "RecentRuns"] = v
+                continue  # Handle separately
             else:
                 if v is not None and v != "":
+                    df.at[idx, k] = v
+
+        # Normalize Section 2 (RecentRuns) into wide columns
+        if fields.get("RecentRuns"):
+            runs = fields["RecentRuns"]
+            # Create a dict for this row
+            dog_row_dict = {col: df.at[idx, col] for col in df.columns}
+            # Normalize Section 2
+            dog_row_dict = _normalize_section2(dog_row_dict, runs)
+            # Write back the S2 columns
+            for k, v in dog_row_dict.items():
+                if k.startswith("S2_"):
                     df.at[idx, k] = v
 
         # Distance repair from DetectedDistance
@@ -447,7 +535,7 @@ def _enrich_section2(df: pd.DataFrame, full_text: str, debug: bool = False) -> p
     if debug:
         print(f"[Section2] Matched={matched} Missed={missed}")
 
-    print(f"✅ Enriched {matched} dogs using deep Section 2 parser.")
+    print(f"[OK] Enriched {matched} dogs using deep Section 2 parser.")
     return df
 
 

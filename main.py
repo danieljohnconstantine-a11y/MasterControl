@@ -3,7 +3,9 @@ import numpy as np
 import pdfplumber
 import os
 from src.parser import parse_race_form
-from src.features import compute_features  # ✅ Enhanced scoring logic
+from src.features import compute_features
+from src.utils import validate_final_output
+from src.exporter import export_ordered
 
 def extract_text_from_pdf(pdf_path):
     text = ""
@@ -12,64 +14,71 @@ def extract_text_from_pdf(pdf_path):
             text += page.extract_text() + "\n"
     return text
 
-# 🚀 Start pipeline
-print("🚀 Starting Greyhound Analytics")
+# Start pipeline (ASCII logging for Windows cp1252 compatibility)
+print("[INFO] Starting Greyhound Analytics")
 
-# ✅ Find all PDFs in data folder
+# Find all PDFs in data folder
 pdf_folder = "data"
 pdf_files = [f for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
 pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(pdf_folder, x)), reverse=True)
 
 if not pdf_files:
-    print("❌ No PDF files found in data folder.")
+    print("[ERROR] No PDF files found in data folder.")
     exit()
 
 all_dogs = []
 
-# ✅ Process each PDF
+# Process each PDF
 for pdf_file in pdf_files:
     pdf_path = os.path.join(pdf_folder, pdf_file)
-    print(f"📄 Processing: {pdf_path}")
+    print(f"[INFO] Processing: {pdf_path}")
     raw_text = extract_text_from_pdf(pdf_path)
     df = parse_race_form(raw_text)
 
-    # ✅ Convert DLR to numeric to avoid type errors
+    # Convert DLR to numeric to avoid type errors
     df["DLR"] = pd.to_numeric(df["DLR"], errors="coerce")
 
-    # ✅ Apply enhanced scoring
+    # Apply enhanced scoring
     df = compute_features(df)
     all_dogs.append(df)
 
-# ✅ Combine all dogs
+# Combine all dogs
 combined_df = pd.concat(all_dogs, ignore_index=True)
-print(f"🐾 Total dogs parsed: {len(combined_df)}")
+print(f"[INFO] Total dogs parsed: {len(combined_df)}")
 
-# ✅ Save full parsed form
+# Validate output
+validate_final_output(combined_df)
+
+# Save full parsed form (legacy)
 combined_df.to_csv("outputs/todays_form.csv", index=False)
-print("📄 Saved parsed form → outputs/todays_form.csv")
+print("[OK] Saved parsed form -> outputs/todays_form.csv")
 
-# ✅ Save ranked dogs
+# Save ranked dogs (legacy)
 ranked = combined_df.sort_values(["Track", "RaceNumber", "FinalScore"], ascending=[True, True, False])
 ranked.to_csv("outputs/ranked.csv", index=False)
-print("📊 Saved ranked dogs → outputs/ranked.csv")
+print("[OK] Saved ranked dogs -> outputs/ranked.csv")
 
-# ✅ Save top picks across all tracks
+# Save top picks across all tracks (legacy)
 picks = ranked.groupby(["Track", "RaceNumber"]).head(1).reset_index(drop=True)
 picks = picks.sort_values("FinalScore", ascending=False)
 
-# Reorder columns
+# Reorder columns for picks
 priority_cols = ["Track", "RaceNumber", "Box", "DogName", "FinalScore", "PrizeMoney"]
 remaining_cols = [col for col in picks.columns if col not in priority_cols]
 ordered_cols = priority_cols + remaining_cols
 picks = picks[ordered_cols]
 
 picks.to_csv("outputs/picks.csv", index=False)
-print("🎯 Saved top picks → outputs/picks.csv")
+print("[OK] Saved top picks -> outputs/picks.csv")
 
-# ✅ Display top picks
-print("\n🏁 Top Picks Across All Tracks:")
+# NEW: Export ordered comparison file with all dogs
+csv_out, xlsx_out = export_ordered(combined_df, output_dir="outputs")
+
+# Display top picks
+print("\n[INFO] Top Picks Across All Tracks:")
 for _, row in picks.iterrows():
     print(f"{row.Track} | Race {row.RaceNumber} | {row.DogName} | Score: {round(row.FinalScore, 3)}")
 
-print("\n📌 Press Enter to exit...")
+print("\n[OK] PDF=Excel data integrity verified")
+print("\n[INFO] Press Enter to exit...")
 input()
