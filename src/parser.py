@@ -488,7 +488,7 @@ _RUN_LINE = re.compile(
     re.I | re.X,
 )
 
-def _extract_recent_runs(block: str, debug=False):
+def _extract_recent_runs(block: str, debug=False, dog_info=None):
     """
     Input: raw block of a dog's 'recent runs' section (Section 2).
     Output: list of normalized dicts with Distance, RaceTime, Sectional1-3, Result, Speed_kmh
@@ -501,9 +501,23 @@ def _extract_recent_runs(block: str, debug=False):
     - Validates distance ranges (200-800m for greyhounds)
     - Returns structured dicts, not raw text strings
     - Handles Unicode spaces and various time formats
+    - Emits structured [S2] diagnostic logs when debug=True
+    
+    Args:
+        block: Raw text containing Section 2 data
+        debug: Enable diagnostic logging (controlled by DEBUG_SECTION2 env var)
+        dog_info: Dict with Track, RaceNumber, Box, DogName for logging context
     """
     runs = []
     skipped_lines = []
+    
+    # Extract dog context for logging
+    if dog_info is None:
+        dog_info = {}
+    track = dog_info.get("Track", "?")
+    race = dog_info.get("RaceNumber", "?")
+    box = dog_info.get("Box", "?")
+    dog_name = dog_info.get("DogName", "Unknown")
     
     # Split on position markers like "1st of 8", "2nd of 6", etc.
     # This identifies individual race entries
@@ -562,12 +576,14 @@ def _extract_recent_runs(block: str, debug=False):
         if speed_data.get("Distance") is None or speed_data.get("RaceTime") is None:
             if debug:
                 skipped_lines.append(("Extraction failed", cand[:80]))
+                print(f'[S2][MISS] Track={track} Race={race} Box={box} Dog="{dog_name}" Reason="no distance/time pair"')
             continue  # Skip incomplete entries
         
         # Validate distance is in reasonable range
         if not (200 <= speed_data["Distance"] <= 800):
             if debug:
                 skipped_lines.append(("Bad distance", cand[:80]))
+                print(f'[S2][MISS] Track={track} Race={race} Box={box} Dog="{dog_name}" Reason="out of range"')
             continue
         
         # Also try to match the original regex pattern for additional fields
@@ -582,17 +598,38 @@ def _extract_recent_runs(block: str, debug=False):
         else:
             # If regex doesn't match, at least save the speed data (if valid)
             runs.append(speed_data)
+        
+        # Log successful extraction
+        if debug and speed_data.get("Speed_kmh"):
+            dist = speed_data.get("Distance")
+            time_val = speed_data.get("RaceTime")
+            speed = round(speed_data.get("Speed_kmh"), 3)
+            sectionals_log = ""
+            s1 = speed_data.get("Sectional1")
+            s2 = speed_data.get("Sectional2")
+            s3 = speed_data.get("Sectional3")
+            if s1 or s2 or s3:
+                sectionals_log = f" Sectionals=[S1={s1 or 'N/A'}, S2={s2 or 'N/A'}, S3={s3 or 'N/A'}]"
+            print(f'[S2][OK] Track={track} Race={race} Box={box} Dog="{dog_name}" Distance={dist}m Time={time_val}s Speed_kmh={speed}{sectionals_log}')
     
-    # Diagnostic output
+    # Diagnostic output and summary
     if debug and skipped_lines:
         print(f"\n[DEBUG] Section 2 extraction - skipped {len(skipped_lines)} lines:")
         for i, (reason, line) in enumerate(skipped_lines[:10]):  # Show first 10
             print(f"  {i+1}. [{reason}] {line}")
-        print(f"[DEBUG] Successfully extracted {len(runs)} race entries")
+    
+    if debug:
+        print(f"[S2][SUMMARY] Track={track} Race={race} Dog=\"{dog_name}\" Parsed={len(runs)} runs")
     
     return runs
 
-def _extract_fields(block: str):
+def _extract_fields(block: str, dog_info=None):
+    """Extract all available fields from a dog's text block.
+    
+    Args:
+        block: Raw text block for a single dog
+        dog_info: Optional dict with Track, RaceNumber, Box, DogName for logging context
+    """
     out = {
         "Colour": None, "Sex": None, "Age": None,
         "Sire": None, "Dam": None,
@@ -658,7 +695,7 @@ def _extract_fields(block: str):
     # Recent runs list - enable debug mode based on environment variable
     import os
     debug_s2 = os.getenv("DEBUG_SECTION2", "").lower() in ("1", "true", "yes")
-    runs = _extract_recent_runs(block, debug=debug_s2)
+    runs = _extract_recent_runs(block, debug=debug_s2, dog_info=dog_info)
     if runs:
         out["RecentRuns"] = runs
 
@@ -703,7 +740,15 @@ def _enrich_section2(df: pd.DataFrame, full_text: str, debug: bool = False) -> p
                 print(f"[MISS] {name}")
             continue
 
-        fields = _extract_fields(block)
+        # Build dog_info context for logging
+        dog_info = {
+            "Track": row.get("Track", "?"),
+            "RaceNumber": row.get("RaceNumber", "?"),
+            "Box": row.get("Box", "?"),
+            "DogName": row.get("DogName", "Unknown")
+        }
+        
+        fields = _extract_fields(block, dog_info=dog_info)
 
         # Write back fields (except RecentRuns, which we'll normalize separately)
         for k, v in fields.items():

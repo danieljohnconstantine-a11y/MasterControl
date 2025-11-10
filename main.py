@@ -61,6 +61,38 @@ def validate_dataframe(df):
         else:
             print(f"[OK] No duplicate rows found (Track/RaceNumber/Box combinations are unique)")
     
+    # 2b. Check for Section 2 duplicate values within each race
+    import os
+    debug_s2 = os.getenv("DEBUG_SECTION2", "").lower() in ("1", "true", "yes")
+    if debug_s2 and all(col in df.columns for col in ["Track", "RaceNumber", "DogName", "S2_1_Distance", "S2_1_RaceTime"]):
+        print("[S2] Checking for duplicate Section 2 values within races...")
+        s2_dup_count = 0
+        
+        for (track, race), group in df.groupby(["Track", "RaceNumber"]):
+            # Get non-null S2 data
+            s2_data = group[["DogName", "S2_1_Distance", "S2_1_RaceTime"]].dropna()
+            if len(s2_data) < 2:
+                continue
+            
+            # Check for duplicates in (Distance, RaceTime) pairs
+            dup_pairs = s2_data.duplicated(subset=["S2_1_Distance", "S2_1_RaceTime"], keep=False)
+            if dup_pairs.any():
+                dup_dogs = s2_data[dup_pairs]["DogName"].tolist()
+                dist = s2_data[dup_pairs]["S2_1_Distance"].iloc[0]
+                time = s2_data[dup_pairs]["S2_1_RaceTime"].iloc[0]
+                # Compute speed for logging
+                try:
+                    speed = (float(dist) / float(time)) * 3.6
+                    print(f"[S2][DUP] Race={race} Dogs={dup_dogs} SharedValues={{Distance={dist}m,Time={time}s,Speed={speed:.3f}km/h}}")
+                except:
+                    print(f"[S2][DUP] Race={race} Dogs={dup_dogs} SharedValues={{Distance={dist}m,Time={time}s}}")
+                s2_dup_count += len(dup_dogs)
+        
+        if s2_dup_count > 0:
+            print(f"[S2][WARN] Found {s2_dup_count} dogs with duplicate Section 2 values")
+        else:
+            print(f"[S2][OK] No duplicate Section 2 values found within races")
+    
     # 3. Check for cell overflow (DogName too long)
     if "DogName" in df.columns:
         long_names = df[df["DogName"].str.len() > 50]
