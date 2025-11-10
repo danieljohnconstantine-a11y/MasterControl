@@ -36,7 +36,7 @@ def _parse_time_to_seconds(val):
 def _extract_speed_from_line(line, debug=False):
     """
     Extract Distance (m), RaceTime, and Sectionals (1-3) from one Section 2 line.
-    Return dict: {Distance, RaceTime, Sectional1, Sectional2, Sectional3, Result, Speed_kmh}
+    Return dict: {Distance, RaceTime, Sectional1, Sectional2, Sectional3, Result, Speed_kmh, matched}
     
     Enhanced logic with robust regex patterns:
     - Handles Unicode non-breaking spaces (\xa0)
@@ -46,10 +46,16 @@ def _extract_speed_from_line(line, debug=False):
     - Validates distance range (200-800m for greyhounds)
     - Computes Speed_kmh = (distance / time) * 3.6
     - Proper time scaling (30.20s not 0.32s)
+    - Expanded patterns: "520 m : 30.25", "400m–23.91", "500m 30.15s"
+    - Diagnostic logging for skipped lines with 'm' or '.'
     """
-    # Normalize whitespace including non-breaking spaces
+    # Enhanced normalization: NBSP, Unicode dashes, colons, em-dashes
     text = line.replace('\xa0', ' ')
-    text = " ".join(text.split())
+    text = text.replace(':', '-')  # Normalize colons to hyphens
+    text = text.replace('–', '-')  # En-dash
+    text = text.replace('—', '-')  # Em-dash
+    text = text.replace('−', '-')  # Minus sign
+    text = " ".join(text.split())  # Collapse multiple spaces
     
     distance = None
     race_time = None
