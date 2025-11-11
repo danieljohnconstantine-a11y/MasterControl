@@ -71,6 +71,50 @@ def export_ordered(df, output_dir):
         print("[WARN] Incomplete Section 2 detected. Consider reviewing parser logic.")
         print("[INFO] Proceeding with export, but data quality may be compromised.")
     
+    # SPEED UNIQUENESS VALIDATION: Check for duplicate Speed_kmh within each race
+    if 'Speed_kmh' in df.columns and 'Track' in df.columns and 'RaceNumber' in df.columns:
+        import os
+        debug_s2 = os.getenv("DEBUG_SECTION2", "0") == "1"
+        
+        print("\n[VALIDATION] Checking Speed_kmh uniqueness per race...")
+        dup_races = 0
+        ok_races = 0
+        
+        for (track, race), group in df.groupby(['Track', 'RaceNumber']):
+            speeds = group['Speed_kmh'].dropna()
+            if len(speeds) > 1:
+                unique_count = speeds.nunique()
+                if unique_count == 1:
+                    # All dogs share same speed - BAD!
+                    dup_races += 1
+                    if debug_s2:
+                        dog_names = group['DogName'].head(3).tolist() if 'DogName' in group.columns else []
+                        print(f"[S2][DUP] Race={race} Track={track}: {len(speeds)} dogs share Speed_kmh={speeds.iloc[0]:.2f} (Dogs: {', '.join(dog_names)})")
+                elif unique_count == len(speeds):
+                    # All speeds unique - GOOD!
+                    ok_races += 1
+                    if debug_s2:
+                        print(f"[S2][OK] Race={race} Track={track}: {unique_count} unique speeds")
+                else:
+                    # Some but not all are duplicates
+                    dup_races += 1
+                    if debug_s2:
+                        print(f"[S2][WARN] Race={race} Track={track}: {unique_count} unique speeds among {len(speeds)} dogs")
+        
+        total_races = ok_races + dup_races
+        if total_races > 0:
+            unique_pct = (ok_races / total_races) * 100
+            print(f"[VALIDATION] Speed uniqueness: {ok_races}/{total_races} races ({unique_pct:.1f}%) have unique per-dog speeds")
+            
+            if unique_pct < 50:
+                print(f"[ERROR] Critical: {100-unique_pct:.1f}% of races have duplicate Speed_kmh values!")
+                print("[ERROR] This indicates Speed_kmh is calculated from race-level data, not per-dog Section 2 data.")
+                print("[ERROR] Check that features_advanced.py uses S2_1_Distance and S2_1_RaceTime for Speed_kmh calculation.")
+            elif unique_pct < 100:
+                print(f"[WARN] {100-unique_pct:.1f}% of races still have duplicate Speed_kmh values.")
+            else:
+                print("[OK] All races have unique per-dog Speed_kmh values!")
+    
     # DEDUPLICATION: Remove duplicate rows
     dedup_cols = ["Track", "RaceNumber", "Box", "DogName"]
     # Only use columns that exist

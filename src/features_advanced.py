@@ -340,6 +340,21 @@ def compute_advanced_features(df):
         axis=1
     )
     
+    # Use Section 2 data for per-dog race time, NOT race-level PastTimes
+    # S2_1_RaceTime and S2_1_Distance are per-dog specific values
+    df['RaceTime_S2'] = df['S2_1_RaceTime'].apply(lambda x: _parse_time_to_seconds(x) if pd.notna(x) else np.nan)
+    df['Distance_S2'] = pd.to_numeric(df['S2_1_Distance'], errors='coerce')
+    
+    # CRITICAL FIX: Speed_kmh must be calculated per-dog from S2 data, NOT from race-level defaults
+    # Each dog gets unique Speed_kmh based on its own S2_1_Distance and S2_1_RaceTime
+    df['Speed_kmh'] = df.apply(
+        lambda r: (r['Distance_S2'] / r['RaceTime_S2']) * 3.6
+        if pd.notna(r['Distance_S2']) and pd.notna(r['RaceTime_S2']) and r['RaceTime_S2'] > 0
+        else np.nan,
+        axis=1
+    )
+    
+    # Fallback: use first past race time only for FinishSpeedIndex calculation (not Speed_kmh)
     df['RaceTime'] = df['PastTimes'].apply(lambda x: x[0] if len(x) > 0 else np.nan)
     df['SectionalDistance'] = 100  # Assume first 100m for sectional
     
@@ -347,12 +362,6 @@ def compute_advanced_features(df):
         lambda r: ((r['RaceTime'] - r['FirstSectional']) / (r['CurrentDistance'] - r['SectionalDistance']))
         if pd.notna(r['RaceTime']) and pd.notna(r['FirstSectional']) and r['CurrentDistance'] > r['SectionalDistance']
         else np.nan,
-        axis=1
-    )
-    
-    df['Speed_kmh'] = df.apply(
-        lambda r: (r['CurrentDistance'] / r['RaceTime']) * 3.6
-        if pd.notna(r['RaceTime']) and r['RaceTime'] > 0 else np.nan,
         axis=1
     )
     
