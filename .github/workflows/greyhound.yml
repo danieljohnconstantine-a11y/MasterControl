@@ -1,0 +1,39 @@
+name: Greyhound Parser
+
+on:
+  push:
+    branches: [ main, master, copilot/fix-this-issue ]
+  workflow_dispatch:
+
+jobs:
+  run-parser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy pdfplumber openpyxl scipy
+          
+      - name: Run parser
+        run: |
+          mkdir -p outputs
+          echo "" | python main.py || true
+          
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: greyhound_comparison_ordered_csv
+          path: outputs/greyhound_comparison_ordered.csv
+          if-no-files-found: warn
+          
+      - name: Upload XLSX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: greyhound_comparison_ordered_xlsx
+          path: outputs/greyhound_comparison_ordered.xlsx
+          if-no-files-found: warn

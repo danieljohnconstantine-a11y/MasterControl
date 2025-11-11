@@ -14,6 +14,211 @@
 import re
 import pandas as pd
 
+
+# =========================================
+# ======== SPEED EXTRACTION HELPERS =======
+# =========================================
+
+def _parse_time_to_seconds(val):
+    """Accept 'mm:ss.xx' or 'ss.xx' -> float seconds; return None if invalid."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    m = re.fullmatch(r"(\d+):(\d{2}\.\d{2})", s)
+    if m:
+        return int(m.group(1)) * 60 + float(m.group(2))
+    m = re.fullmatch(r"(\d{1,2}\.\d{2})", s)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def _extract_speed_from_line(line, debug=False):
+    """
+    Extract Distance (m), RaceTime, and Sectionals (1-3) from one Section 2 line.
+    Return dict: {Distance, RaceTime, Sectional1, Sectional2, Sectional3, Result, Speed_kmh, matched}
+    
+    Enhanced logic with robust regex patterns:
+    - Handles Unicode non-breaking spaces (\xa0)
+    - Matches "NNNm XX.XX" or "NNN m XX.XX" with flexible spacing
+    - Handles split patterns like "30.20(1st)" or "30.20sec"
+    - Multiple distances on same line (take first valid)
+    - Validates distance range (200-800m for greyhounds)
+    - Computes Speed_kmh = (distance / time) * 3.6
+    - Proper time scaling (30.20s not 0.32s)
+    - Expanded patterns: "520 m : 30.25", "400m–23.91", "500m 30.15s"
+    - Diagnostic logging for skipped lines with 'm' or '.'
+    """
+    # Enhanced normalization: NBSP, Unicode dashes, colons, em-dashes
+    text = line.replace('\xa0', ' ')
+    text = text.replace(':', '-')  # Normalize colons to hyphens
+    text = text.replace('–', '-')  # En-dash
+    text = text.replace('—', '-')  # Em-dash
+    text = text.replace('−', '-')  # Minus sign
+    text = " ".join(text.split())  # Collapse multiple spaces
+    
+    distance = None
+    race_time = None
+    speed_kmh = None
+    
+    # Enhanced pattern 1: Distance & time together with flexible spacing and optional separators
+    # Handles: "520m 30.20", "520 m 30.20", "520m:30.20", "520m-30.20"
+    pattern1 = r"(?P<distance>\d{2,4})\s*m\s*[:;\-]?\s*(?P<time>\d{1,2}\.\d{2})(?:s|sec|secs)?"
+    match = re.search(pattern1, text, re.IGNORECASE)
+    
+    if match:
+        dist_val = int(match.group('distance'))
+        time_str = match.group('time')
+        
+        # Validate distance range (200-800m typical for greyhounds)
+        if 200 <= dist_val <= 800:
+            distance = dist_val
+            
+            # Parse time - handle both "30.20" (30.20s) and "0.32" (need to scale)
+            time_float = float(time_str)
+            
+            # If time is suspiciously small (< 10), it might be in mm.ss format misinterpreted
+            # For greyhounds, races are typically 15-45 seconds
+            # If we see 0.32, it's likely 32 seconds written as 0:32
+            if time_float < 10:
+                # Likely needs scaling: 0.32 -> 32 seconds
+                # Check if it's a decimal representation of mm:ss
+                race_time_seconds = time_float * 100  # 0.32 -> 32
+            else:
+                race_time_seconds = time_float
+            
+            race_time = str(race_time_seconds)
+            
+            # Compute speed_kmh = (distance / time) * 3.6
+            try:
+                if race_time_seconds > 0:
+                    speed_kmh = (dist_val / race_time_seconds) * 3.6
+            except (ValueError, ZeroDivisionError):
+                pass
+    
+    # Enhanced pattern 2: Look for time attached to result like "30.20(1st)"
+    if distance is None or race_time is None:
+        pattern2 = r"(\d{1,2}\.\d{2})(?:s|sec)?\s*\(\s*\d+(?:st|nd|rd|th)"
+        time_match = re.search(pattern2, text)
+        if time_match:
+            time_str = time_match.group(1)
+            time_float = float(time_str)
+            
+            # Apply same scaling logic
+            if time_float < 10:
+                race_time_seconds = time_float * 100
+            else:
+                race_time_seconds = time_float
+            
+            if race_time is None:
+                race_time = str(race_time_seconds)
+                
+                # Try to find distance separately
+                if distance is None:
+                    dist_matches = re.findall(r"(\d{3,4})\s*m\b", text)
+                    if dist_matches:
+                        dist_val = int(dist_matches[0])
+                        if 200 <= dist_val <= 800:
+                            distance = dist_val
+                            if speed_kmh is None:
+                                speed_kmh = (dist_val / race_time_seconds) * 3.6
+    
+    # Fallback: find ALL occurrences separately if regex didn't match
+    if distance is None:
+        distances = re.findall(r"(\d{3,4})\s*m\b", text)
+        if distances:
+            first_dist = int(distances[0])
+            if 200 <= first_dist <= 800:
+                distance = first_dist
+    
+    # If we don't have race_time yet, find times more aggressively
+    if race_time is None:
+        # Look for patterns like XX.XX anywhere
+        times = re.findall(r"\b(\d{1,2}\.\d{2})(?:s|sec|secs)?\b", text)
+        if times:
+            # Take the largest time (most likely to be race time, not sectional)
+            time_candidates = []
+            for t in times:
+                tf = float(t)
+                # Scale if needed
+                if tf < 10:
+                    time_candidates.append(tf * 100)
+                else:
+                    time_candidates.append(tf)
+            
+            if time_candidates:
+                race_time_seconds = max(time_candidates)  # Longest time is usually race time
+                race_time = str(race_time_seconds)
+                
+                # Try to compute speed if we have both now
+                if distance and not speed_kmh:
+                    try:
+                        if race_time_seconds > 0:
+                            speed_kmh = (distance / race_time_seconds) * 3.6
+                    except (ValueError, ZeroDivisionError):
+                        pass
+    
+    # Sectionals: collect up to 3 earliest/smallest times (sectionals are faster than full race)
+    all_times = re.findall(r"\b(\d{1,2}\.\d{2})(?:s|sec|secs)?\b", text)
+    sectional_values = []
+    for t in all_times:
+        tf = float(t)
+        # Sectionals are typically < 10 seconds, so don't scale these
+        if tf < 15:  # Sectionals are quick
+            sectional_values.append(t)
+    
+    # Take up to 3 sectionals
+    sectionals = sectional_values[:3]
+    
+    # Extract result (1st, 2nd, 3rd, etc.)
+    result_match = re.search(r"(\d+(?:st|nd|rd|th))\s+of\s+\d+", text)
+    result = result_match.group(1) if result_match else None
+    
+    # Debug logging
+    if debug and (distance is None or race_time is None):
+        print(f"[DEBUG] Failed to extract from: {text[:100]}")
+        print(f"  Distance: {distance}, RaceTime: {race_time}")
+    
+    out = {
+        "Distance": distance,
+        "RaceTime": race_time,
+        "Sectional1": sectionals[0] if len(sectionals) > 0 else None,
+        "Sectional2": sectionals[1] if len(sectionals) > 1 else None,
+        "Sectional3": sectionals[2] if len(sectionals) > 2 else None,
+        "Result": result,
+        "Speed_kmh": speed_kmh,
+    }
+    return out
+
+
+def _normalize_section2(dog_row, section2_list, max_items=5):
+    """
+    Flatten Section 2 list into wide columns: S2_1_Distance, S2_1_RaceTime, S2_1_Sectional1, S2_1_Result, etc.
+    Also compute all Speed_kmh values and store them for selecting the fastest speed.
+    """
+    all_speeds = []
+    
+    for i in range(max_items):
+        s2 = section2_list[i] if i < len(section2_list) else {}
+        for key in ["Distance", "RaceTime", "Sectional1", "Sectional2", "Sectional3", "Result"]:
+            dog_row[f"S2_{i+1}_{key}"] = s2.get(key)
+        
+        # Compute Speed_kmh for this run if both Distance and RaceTime are available
+        if s2.get("Distance") and s2.get("RaceTime"):
+            try:
+                distance_m = float(s2.get("Distance"))
+                race_time_s = float(s2.get("RaceTime"))
+                if race_time_s > 0 and 200 <= distance_m <= 800:
+                    speed_kmh = (distance_m / race_time_s) * 3.6
+                    all_speeds.append(speed_kmh)
+            except (ValueError, TypeError):
+                pass
+    
+    dog_row["S2_Count"] = len(section2_list)
+    dog_row["S2_AllSpeeds"] = all_speeds if all_speeds else None
+    return dog_row
+
+
 # ---------- Optional: fuzzy matcher (rapidfuzz). If unavailable, fall back gracefully ----------
 try:
     from rapidfuzz import fuzz
@@ -138,7 +343,7 @@ def parse_race_form(text: str) -> pd.DataFrame:
     # Phase 2: Section 2 enrichment
     df = _enrich_section2(df, text, debug=False)
 
-    print(f"✅ Parsed {len(df)} dogs (with {(df.get('Owner').notna().sum() if 'Owner' in df.columns else 0)} enriched).")
+    print(f"[OK] Parsed {len(df)} dogs (with {(df.get('Owner').notna().sum() if 'Owner' in df.columns else 0)} enriched).")
     return df
 
 
@@ -299,23 +504,148 @@ _RUN_LINE = re.compile(
     re.I | re.X,
 )
 
-def _extract_recent_runs(block: str):
+def _extract_recent_runs(block: str, debug=False, dog_info=None):
+    """
+    Input: raw block of a dog's 'recent runs' section (Section 2).
+    Output: list of normalized dicts with Distance, RaceTime, Sectional1-3, Result, Speed_kmh
+    
+    Enhanced validation with proper block isolation:
+    - Detects start/end markers: starts with "N. DOG_NAME", ends before next numbered header
+    - Only includes lines matching both distance (m) AND time (seconds)
+    - Ignores lines with "Trainer", "Grade", "Ongoing Winners", "Race No"
+    - Ensures each run entry becomes its own clean record
+    - Validates distance ranges (200-800m for greyhounds)
+    - Returns structured dicts, not raw text strings
+    - Handles Unicode spaces and various time formats
+    - Emits structured [S2] diagnostic logs when debug=True
+    
+    Args:
+        block: Raw text containing Section 2 data
+        debug: Enable diagnostic logging (controlled by DEBUG_SECTION2 env var)
+        dog_info: Dict with Track, RaceNumber, Box, DogName for logging context
+    """
     runs = []
+    skipped_lines = []
+    
+    # Extract dog context for logging
+    if dog_info is None:
+        dog_info = {}
+    track = dog_info.get("Track", "?")
+    race = dog_info.get("RaceNumber", "?")
+    box = dog_info.get("Box", "?")
+    dog_name = dog_info.get("DogName", "Unknown")
+    
+    # Split on position markers like "1st of 8", "2nd of 6", etc.
+    # This identifies individual race entries
     candidates = re.split(r"(?=(?:\d{1,2}(?:st|nd|rd|th)\s+of\s+\d+))", block)
+    
     for cand in candidates:
         cand = cand.strip()
         if not cand:
             continue
-        m = _RUN_LINE.search(cand)
-        if not m:
+        
+        # Skip lines that are clearly not race results:
+        # - Race headers (e.g., "Race No 12")
+        if re.search(r"\bRace\s+No\.?\s+\d+", cand, re.IGNORECASE):
+            if debug:
+                skipped_lines.append(("Race header", cand[:80]))
             continue
-        d = m.groupdict()
-        if d.get("prize"):
-            d["prize"] = d["prize"].replace(",", "")
-        runs.append(d)
+        
+        # - Trainer information (starts with "Trainer:")
+        if re.search(r"^\s*Trainer\s*:", cand, re.IGNORECASE):
+            if debug:
+                skipped_lines.append(("Trainer line", cand[:80]))
+            continue
+        
+        # - Grade information lines
+        if re.search(r"^\s*Grade\s*:", cand, re.IGNORECASE):
+            if debug:
+                skipped_lines.append(("Grade line", cand[:80]))
+            continue
+        
+        # - Ongoing Winners lines
+        if re.search(r"\bOngoing\s+Winners\b", cand, re.IGNORECASE):
+            if debug:
+                skipped_lines.append(("Ongoing Winners", cand[:80]))
+            continue
+        
+        # - Lines that start with numbered dog headers (e.g., "1. FAST DOG")
+        if re.match(r"^\s*\d+\.\s+[A-Z][A-Z\s']+", cand):
+            if debug:
+                skipped_lines.append(("Dog header", cand[:80]))
+            continue
+        
+        # Only keep lines that have BOTH distance marker AND time marker
+        # Enhanced patterns to catch more variations
+        has_distance = re.search(r"\b\d{3,4}\s*m\b", cand)
+        has_time = re.search(r"\b(\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})(?:s|sec|secs)?\b", cand)
+        
+        if not (has_distance and has_time):
+            if debug and len(cand) > 20:  # Only log substantial lines
+                skipped_lines.append(("Missing dist/time", cand[:80]))
+            continue
+        
+        # Extract speed-related fields with enhanced extraction
+        speed_data = _extract_speed_from_line(cand, debug=debug)
+        
+        # Validate that we got at least distance and race time
+        if speed_data.get("Distance") is None or speed_data.get("RaceTime") is None:
+            if debug:
+                skipped_lines.append(("Extraction failed", cand[:80]))
+                print(f'[S2][MISS] Track={track} Race={race} Box={box} Dog="{dog_name}" Reason="no distance/time pair"')
+            continue  # Skip incomplete entries
+        
+        # Validate distance is in reasonable range
+        if not (200 <= speed_data["Distance"] <= 800):
+            if debug:
+                skipped_lines.append(("Bad distance", cand[:80]))
+                print(f'[S2][MISS] Track={track} Race={race} Box={box} Dog="{dog_name}" Reason="out of range"')
+            continue
+        
+        # Also try to match the original regex pattern for additional fields
+        m = _RUN_LINE.search(cand)
+        if m:
+            d = m.groupdict()
+            if d.get("prize"):
+                d["prize"] = d["prize"].replace(",", "")
+            # Merge speed data with original data (speed data takes precedence)
+            d.update(speed_data)
+            runs.append(d)
+        else:
+            # If regex doesn't match, at least save the speed data (if valid)
+            runs.append(speed_data)
+        
+        # Log successful extraction
+        if debug and speed_data.get("Speed_kmh"):
+            dist = speed_data.get("Distance")
+            time_val = speed_data.get("RaceTime")
+            speed = round(speed_data.get("Speed_kmh"), 3)
+            sectionals_log = ""
+            s1 = speed_data.get("Sectional1")
+            s2 = speed_data.get("Sectional2")
+            s3 = speed_data.get("Sectional3")
+            if s1 or s2 or s3:
+                sectionals_log = f" Sectionals=[S1={s1 or 'N/A'}, S2={s2 or 'N/A'}, S3={s3 or 'N/A'}]"
+            print(f'[S2][OK] Track={track} Race={race} Box={box} Dog="{dog_name}" Distance={dist}m Time={time_val}s Speed_kmh={speed}{sectionals_log}')
+    
+    # Diagnostic output and summary
+    if debug and skipped_lines:
+        print(f"\n[DEBUG] Section 2 extraction - skipped {len(skipped_lines)} lines:")
+        for i, (reason, line) in enumerate(skipped_lines[:10]):  # Show first 10
+            print(f"  {i+1}. [{reason}] {line}")
+    
+    if debug:
+        print(f"[S2][SUMMARY] Track={track} Race={race} Dog=\"{dog_name}\" Parsed={len(runs)} runs")
+    
     return runs
 
-def _extract_fields(block: str):
+def _extract_fields(block: str, dog_info=None):
+    """Extract all available fields from a dog's text block.
+    
+    Args:
+        block: Raw text block for a single dog
+        dog_info: Optional dict with Track, RaceNumber, Box, DogName for logging context
+    """
     out = {
         "Colour": None, "Sex": None, "Age": None,
         "Sire": None, "Dam": None,
@@ -378,8 +708,10 @@ def _extract_fields(block: str):
         if v:
             out[k] = v
 
-    # Recent runs list
-    runs = _extract_recent_runs(block)
+    # Recent runs list - enable debug mode based on environment variable
+    import os
+    debug_s2 = os.getenv("DEBUG_SECTION2", "").lower() in ("1", "true", "yes")
+    runs = _extract_recent_runs(block, debug=debug_s2, dog_info=dog_info)
     if runs:
         out["RecentRuns"] = runs
 
@@ -424,15 +756,34 @@ def _enrich_section2(df: pd.DataFrame, full_text: str, debug: bool = False) -> p
                 print(f"[MISS] {name}")
             continue
 
-        fields = _extract_fields(block)
+        # Build dog_info context for logging
+        dog_info = {
+            "Track": row.get("Track", "?"),
+            "RaceNumber": row.get("RaceNumber", "?"),
+            "Box": row.get("Box", "?"),
+            "DogName": row.get("DogName", "Unknown")
+        }
+        
+        fields = _extract_fields(block, dog_info=dog_info)
 
-        # Write back fields
+        # Write back fields (except RecentRuns, which we'll normalize separately)
         for k, v in fields.items():
             if k == "RecentRuns":
-                if v:
-                    df.at[idx, "RecentRuns"] = v
+                continue  # Handle separately
             else:
                 if v is not None and v != "":
+                    df.at[idx, k] = v
+
+        # Normalize Section 2 (RecentRuns) into wide columns
+        if fields.get("RecentRuns"):
+            runs = fields["RecentRuns"]
+            # Create a dict for this row
+            dog_row_dict = {col: df.at[idx, col] for col in df.columns}
+            # Normalize Section 2
+            dog_row_dict = _normalize_section2(dog_row_dict, runs)
+            # Write back the S2 columns
+            for k, v in dog_row_dict.items():
+                if k.startswith("S2_"):
                     df.at[idx, k] = v
 
         # Distance repair from DetectedDistance
@@ -447,7 +798,7 @@ def _enrich_section2(df: pd.DataFrame, full_text: str, debug: bool = False) -> p
     if debug:
         print(f"[Section2] Matched={matched} Missed={missed}")
 
-    print(f"✅ Enriched {matched} dogs using deep Section 2 parser.")
+    print(f"[OK] Enriched {matched} dogs using deep Section 2 parser.")
     return df
 
 
