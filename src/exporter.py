@@ -79,6 +79,13 @@ def export_ordered(df, output_dir):
         print("\n[VALIDATION] Checking Speed_kmh uniqueness per race...")
         dup_races = 0
         ok_races = 0
+        dogs_with_multi_speeds = 0
+        
+        # Count dogs with multiple historical speeds
+        if 'S2_AllSpeeds' in df.columns:
+            dogs_with_multi_speeds = df['S2_AllSpeeds'].apply(
+                lambda x: len(x) > 1 if x and isinstance(x, list) else False
+            ).sum()
         
         for (track, race), group in df.groupby(['Track', 'RaceNumber']):
             speeds = group['Speed_kmh'].dropna()
@@ -105,6 +112,9 @@ def export_ordered(df, output_dir):
         if total_races > 0:
             unique_pct = (ok_races / total_races) * 100
             print(f"[VALIDATION] Speed uniqueness: {ok_races}/{total_races} races ({unique_pct:.1f}%) have unique per-dog speeds")
+            
+            if dogs_with_multi_speeds > 0:
+                print(f"[S2][SUMMARY] Fastest Speed selected per dog ({dogs_with_multi_speeds} dogs with multi-length histories)")
             
             if unique_pct < 50:
                 print(f"[ERROR] Critical: {100-unique_pct:.1f}% of races have duplicate Speed_kmh values!")

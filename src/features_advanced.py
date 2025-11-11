@@ -345,14 +345,23 @@ def compute_advanced_features(df):
     df['RaceTime_S2'] = df['S2_1_RaceTime'].apply(lambda x: _parse_time_to_seconds(x) if pd.notna(x) else np.nan)
     df['Distance_S2'] = pd.to_numeric(df['S2_1_Distance'], errors='coerce')
     
-    # CRITICAL FIX: Speed_kmh must be calculated per-dog from S2 data, NOT from race-level defaults
-    # Each dog gets unique Speed_kmh based on its own S2_1_Distance and S2_1_RaceTime
-    df['Speed_kmh'] = df.apply(
-        lambda r: (r['Distance_S2'] / r['RaceTime_S2']) * 3.6
-        if pd.notna(r['Distance_S2']) and pd.notna(r['RaceTime_S2']) and r['RaceTime_S2'] > 0
-        else np.nan,
-        axis=1
-    )
+    # ENHANCED: Speed_kmh = MAX of all historical speeds from Section 2 data
+    # This gives each dog's fastest speed across all valid distance/time pairs
+    def get_max_speed(row):
+        # Try to use S2_AllSpeeds list first (contains pre-computed speeds from all runs)
+        all_speeds = row.get('S2_AllSpeeds')
+        if all_speeds and isinstance(all_speeds, list) and len(all_speeds) > 0:
+            return max(all_speeds)
+        
+        # Fallback: compute from S2_1_Distance and S2_1_RaceTime if available
+        dist = row.get('Distance_S2')
+        time = row.get('RaceTime_S2')
+        if pd.notna(dist) and pd.notna(time) and time > 0:
+            return (dist / time) * 3.6
+        
+        return np.nan
+    
+    df['Speed_kmh'] = df.apply(get_max_speed, axis=1)
     
     # Fallback: use first past race time only for FinishSpeedIndex calculation (not Speed_kmh)
     df['RaceTime'] = df['PastTimes'].apply(lambda x: x[0] if len(x) > 0 else np.nan)

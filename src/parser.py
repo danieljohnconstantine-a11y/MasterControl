@@ -194,12 +194,28 @@ def _extract_speed_from_line(line, debug=False):
 def _normalize_section2(dog_row, section2_list, max_items=5):
     """
     Flatten Section 2 list into wide columns: S2_1_Distance, S2_1_RaceTime, S2_1_Sectional1, S2_1_Result, etc.
+    Also compute all Speed_kmh values and store them for selecting the fastest speed.
     """
+    all_speeds = []
+    
     for i in range(max_items):
         s2 = section2_list[i] if i < len(section2_list) else {}
         for key in ["Distance", "RaceTime", "Sectional1", "Sectional2", "Sectional3", "Result"]:
             dog_row[f"S2_{i+1}_{key}"] = s2.get(key)
+        
+        # Compute Speed_kmh for this run if both Distance and RaceTime are available
+        if s2.get("Distance") and s2.get("RaceTime"):
+            try:
+                distance_m = float(s2.get("Distance"))
+                race_time_s = float(s2.get("RaceTime"))
+                if race_time_s > 0 and 200 <= distance_m <= 800:
+                    speed_kmh = (distance_m / race_time_s) * 3.6
+                    all_speeds.append(speed_kmh)
+            except (ValueError, TypeError):
+                pass
+    
     dog_row["S2_Count"] = len(section2_list)
+    dog_row["S2_AllSpeeds"] = all_speeds if all_speeds else None
     return dog_row
 
 
