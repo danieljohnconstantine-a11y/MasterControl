@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Dict
 from .columns import COLUMN_ORDER
+from .validate_and_finalize import compute_speed_fields, validate_dataset
 
 def _coerce_int(series):
     try:
@@ -46,6 +47,9 @@ def merge_sort_and_export(records: List[Dict], output_dir: str) -> None:
 
     df = pd.DataFrame(records)
     df = _ensure_columns(df)
+    
+    # Compute speed fields from race time and distance
+    df = compute_speed_fields(df)
 
     # Sort by Track, Race_No, Box (numeric if possible for race/box)
     # Preserve original values in export while sorting on numeric views
@@ -66,6 +70,11 @@ def merge_sort_and_export(records: List[Dict], output_dir: str) -> None:
     notes = [
         f"Exported columns={len(df_out.columns)} (ordered first {len(COLUMN_ORDER)}).",
         "Sorted by Track → Race_No → Box.",
+        "Speed fields computed from race time and distance.",
     ]
     _audit(df_out, output_dir, notes)
+    
+    # Run validation and generate report
+    validate_dataset(df_out, output_dir)
+    
     print(f"✅ Exported {len(df_out)} rows → {excel_path}, {csv_path}")
