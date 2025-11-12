@@ -1,62 +1,148 @@
 import re
+import statistics
 from typing import List, Dict
 
 def parse_greyhound_data(text: str) -> List[Dict]:
     """
-    Extract structured greyhound racing data (Groups A+B+C) from DOCX text.
-    Returns list of dictionaries ready for DataFrame merge/export.
+    Advanced parser for greyhound racing DOCX text.
+    Extracts Group A (Identification), Group B (Career Stats),
+    and Group C (Historical Race Detail) into a single unified structure.
     """
 
-    # Regex patterns for core fields
-    race_header_pattern = re.compile(
-        r"Race No\s*(\d+).*?([A-Za-z]+)\s*(\d{3,4})m", re.DOTALL)
-    dog_block_pattern = re.compile(
-        r"(\d+)\.\s*([A-Za-z'\- ]+).*?(\d+\-\d+\-\d+).*?Trainer\s*([A-Za-z ]+)",
-        re.DOTALL)
+    # --- Regex anchors for Race + Dog blocks ---
+    race_header_re = re.compile(r"Race No\s*(\d+).*?([A-Za-z]+)\s*(\d{3,4})m", re.DOTALL)
+    dog_start_re   = re.compile(r"(\d+)\.\s*([A-Za-z'\- ]+)", re.MULTILINE)
 
-    hist_pattern = re.compile(
-        r"(\d+(?:st|nd|rd|th)) of \d+.*?(\d{1,2}/\d{1,2}/\d{4}).*?([A-Za-z]+).*?Distance (\d{3,4})m.*?Race Time ([\d:.]+).*?BP (\d).*?Odds (\S+).*?Winner ([A-Za-z' ]+)",
-        re.DOTALL)
+    # --- Pattern fragments for details ---
+    trainer_re  = re.compile(r"Trainer[:\s]*([A-Z][A-Za-z ]+)")
+    career_re   = re.compile(r"Career[:\s]+(\d+\s*-\s*\d+\s*-\s*\d+)")
+    prize_re    = re.compile(r"Prize\s*\$?([\d,]+)")
+    hist_line_re = re.compile(
+        r"(\d{1,2}/\d{1,2}/\d{4}).*?([A-Za-z]+).*?Distance\s*(\d{3,4})m.*?"
+        r"Race Time\s*([\d:.]+).*?Sec Time\s*([\d:.]+)?.*?BP\s*(\d).*?"
+        r"Odds\s*(\S+).*?Winner\s*([A-Za-z' ]+)", re.DOTALL)
 
-    records = []
-    current_track, current_race = None, None
+    # --- Initialise ---
+    all_dogs: List[Dict] = []
 
-    for race_match in race_header_pattern.finditer(text):
-        current_race = race_match.group(1)
-        current_track = race_match.group(2).capitalize()
+    # --- Iterate over races ---
+    for race_match in race_header_re.finditer(text):
+        race_no, track, distance = race_match.groups()
+        race_start = race_match.end()
+        
+        # Find next race or end of text
+        next_race = race_header_re.search(text, race_start)
+        race_end = next_race.start() if next_race else len(text)
+        race_segment = text[race_start:race_end]
 
-        race_text = text[race_match.end():]
-        for dog_match in dog_block_pattern.finditer(race_text):
-            dog = {
-                "Track": current_track,
-                "Race_No": current_race,
-                "Box": dog_match.group(1),
-                "Dog_Name": dog_match.group(2).strip(),
-                "Career_W-P-S": dog_match.group(3),
-                "Trainer": dog_match.group(4).strip(),
+        # Find all dogs in this race
+        dog_matches = list(dog_start_re.finditer(race_segment))
+        
+        for i, dog_match in enumerate(dog_matches):
+            box_num = dog_match.group(1)
+            name = dog_match.group(2).strip()
+            
+            # Extract dog section (from this dog to next dog or end of race)
+            dog_start = dog_match.start()
+            if i + 1 < len(dog_matches):
+                dog_end = dog_matches[i + 1].start()
+            else:
+                dog_end = len(race_segment)
+            
+            dog_section = race_segment[dog_start:dog_end]
+
+            record = {
+                # === Group A ===
+                "Track": track,
+                "Race_No": race_no,
+                "Box": box_num,
+                "Dog_Name": name,
+                "Max_Speed_km/h": "",
+
+                "Tab_No": "",
+                "FF_Form": "",
+                "A/S": "",
+                "WT (kg)": "",
+                "Trainer": trainer_re.search(dog_section).group(1).strip()
+                    if trainer_re.search(dog_section) else "",
+                "Sire": "",
+                "Dam": "",
+                "Owner": "",
+
+                # === Group B ===
+                "Career_W-P-S": career_re.search(dog_section).group(1).replace(" ", "")
+                    if career_re.search(dog_section) else "",
+                "Prize_Money": prize_re.search(dog_section).group(1)
+                    if prize_re.search(dog_section) else "",
+                "RTC": "",
+                "DLR": "",
+                "DLW": "",
+                "Car_PM/s (G1)": "",
+                "12m_PM/s (G2)": "",
+                "API (G3)": "",
+                "RTC/km": "",
+                "Trainer_Win_%": "",
+                "Trainer_Place_%": "",
+                "Raced_Dist_W-P-S": "",
+                "Crs_W-P-S": "",
+                "Dist_W-P-S": "",
+                "FU_W-P-S": "",
+                "2U_W-P-S": "",
+                "DOD": "",
+                "Avg_Speed_km/h": "",
+                "Min_Speed_km/h": "",
+                "Max_Speed_km/h": "",
+
+                # === Group C ===
+                "Hist_Date": "",
+                "Hist_Track": "",
+                "Hist_Distance": "",
+                "Hist_Finish_Pos": "",
+                "Hist_Margin_L": "",
+                "Hist_Race_Time": "",
+                "Hist_Sec_Time": "",
+                "Hist_Sec_Time_Adj": "",
+                "Hist_Speed_km/h": "",
+                "Hist_SOT": "",
+                "Hist_RST": "",
+                "Hist_BP": "",
+                "Hist_Odds": "",
+                "Hist_API": "",
+                "Hist_Prize_Won": "",
+                "Hist_Winner": "",
+                "Hist_2nd_Place": "",
+                "Hist_3rd_Place": "",
+                "Hist_Settled_Turn": "",
+                "Hist_Ongoing_Winners": "",
+                "Hist_Track_Direction": ""
             }
 
-            # Try to extract historical speeds
-            hist_match = hist_pattern.search(race_text)
-            if hist_match:
-                dog["Hist_Date"] = hist_match.group(2)
-                dog["Hist_Track"] = hist_match.group(3)
-                dog["Hist_Distance"] = hist_match.group(4)
-                dog["Hist_Race_Time"] = hist_match.group(5)
-                dog["Hist_BP"] = hist_match.group(6)
-                dog["Hist_Odds"] = hist_match.group(7)
-                dog["Hist_Winner"] = hist_match.group(8)
-            else:
-                dog["Hist_Date"] = ""
-                dog["Hist_Track"] = ""
-                dog["Hist_Distance"] = ""
-                dog["Hist_Race_Time"] = ""
-                dog["Hist_BP"] = ""
-                dog["Hist_Odds"] = ""
-                dog["Hist_Winner"] = ""
+            # --- Historical extraction (multiple possible per dog) ---
+            hist_entries = []
+            for hm in hist_line_re.finditer(dog_section):
+                hist_entries.append({
+                    "Hist_Date": hm.group(1),
+                    "Hist_Track": hm.group(2),
+                    "Hist_Distance": hm.group(3),
+                    "Hist_Race_Time": hm.group(4),
+                    "Hist_Sec_Time": hm.group(5) or "",
+                    "Hist_BP": hm.group(6),
+                    "Hist_Odds": hm.group(7),
+                    "Hist_Winner": hm.group(8).strip(),
+                })
+            if hist_entries:
+                last = hist_entries[0]
+                for k, v in last.items():
+                    record[k] = v
+                # optional derived speed
+                try:
+                    sec = float(last["Hist_Race_Time"].replace(":", ".")) if last["Hist_Race_Time"] else 0
+                    dist = int(last["Hist_Distance"])
+                    if sec:
+                        record["Max_Speed_km/h"] = round((dist / sec) * 3.6, 2)
+                except Exception:
+                    pass
 
-            # Placeholder for calculated fields (e.g., speed)
-            dog["Max_Speed_km/h"] = ""
-            records.append(dog)
+            all_dogs.append(record)
 
-    return records
+    return all_dogs
