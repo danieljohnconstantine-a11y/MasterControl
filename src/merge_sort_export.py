@@ -6,26 +6,8 @@ from typing import List, Dict
 from .columns import COLUMN_ORDER
 from .validate_and_finalize import compute_speed_fields, validate_dataset
 
-def _coerce_int(series):
-    try:
-        return pd.to_numeric(series, errors="coerce")
-    except Exception:
-        return series
-
-def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Add any missing columns as empty strings
-    for col in COLUMN_ORDER:
-        if col not in df.columns:
-            df[col] = ""
-    # Keep any extra columns at the end (but we still export ordered)
-    return df
-
-def _ordered(df: pd.DataFrame) -> pd.DataFrame:
-    cols_in_df = [c for c in COLUMN_ORDER if c in df.columns]
-    extras = [c for c in df.columns if c not in COLUMN_ORDER]
-    return df[cols_in_df + extras]
-
 def _audit(df: pd.DataFrame, output_dir: str, notes: List[str]) -> None:
+    """Write audit log with timestamp, row count, missing columns, notes, and samples."""
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     audit_path = os.path.join(output_dir, "logs", "parse_audit.txt")
     summary = {
@@ -40,41 +22,59 @@ def _audit(df: pd.DataFrame, output_dir: str, notes: List[str]) -> None:
     print(f"📝 Audit written → {audit_path}")
 
 def merge_sort_and_export(records: List[Dict], output_dir: str) -> None:
+    """
+    Consolidate records, enforce unified schema, sort, and export to Excel/CSV.
+    
+    Maintains audit logging and validation while using simplified sorting/export path.
+    """
     if not records:
         print("⚠️ No records found to export.")
         _audit(pd.DataFrame(), output_dir, ["No records"])
         return
 
+    # Create DataFrame from parsed records
     df = pd.DataFrame(records)
-    df = _ensure_columns(df)
     
-    # Compute speed fields from race time and distance
+    # Ensure all 54 COLUMN_ORDER fields exist (add missing as empty strings)
+    for col in COLUMN_ORDER:
+        if col not in df.columns:
+            df[col] = ""
+    
+    # No-op speed computation (kept for backward compatibility)
     df = compute_speed_fields(df)
+    
+    # Reindex to enforce unified column order
+    df = df.reindex(columns=COLUMN_ORDER)
+    
+    # Convert Race_No and Box to numeric for proper sorting (coerce errors to NaN)
+    df["Race_No"] = pd.to_numeric(df["Race_No"], errors="coerce")
+    df["Box"] = pd.to_numeric(df["Box"], errors="coerce")
+    
+    # Sort by Track (alphabetical), Race_No (numeric), Box (numeric)
+    df = df.sort_values(by=["Track", "Race_No", "Box"], ascending=[True, True, True])
 
-    # Sort by Track, Race_No, Box (numeric if possible for race/box)
-    # Preserve original values in export while sorting on numeric views
-    df["_Race_No_num"] = _coerce_int(df["Race_No"])
-    df["_Box_num"] = _coerce_int(df["Box"])
-    df = df.sort_values(by=["Track", "_Race_No_num", "_Box_num", "Race_No", "Box"], ascending=[True, True, True, True, True])
-    df = df.drop(columns=["_Race_No_num", "_Box_num"])
-
-    # Enforce column order for export
-    df_out = _ordered(df)
-
+    # Prepare output paths
     os.makedirs(output_dir, exist_ok=True)
     excel_path = os.path.join(output_dir, "all_dogs_master.xlsx")
     csv_path = os.path.join(output_dir, "all_dogs_master.csv")
-    df_out.to_excel(excel_path, index=False)
-    df_out.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    
+    # Export to Excel with single sheet "All Data"
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="All Data")
+    
+    # Export to CSV with UTF-8-BOM for Excel compatibility
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
+    # Audit logging
     notes = [
-        f"Exported columns={len(df_out.columns)} (ordered first {len(COLUMN_ORDER)}).",
+        f"Exported columns={len(df.columns)} (unified schema with {len(COLUMN_ORDER)} fields).",
         "Sorted by Track → Race_No → Box.",
+        "Unified single-sheet export; simplified sort/export path.",
         "Only real DOCX data extracted - no computed or filled values.",
     ]
-    _audit(df_out, output_dir, notes)
+    _audit(df, output_dir, notes)
     
-    # Run validation and generate report
-    validate_dataset(df_out, output_dir)
+    # Validation reporting
+    validate_dataset(df, output_dir)
     
-    print(f"✅ Exported {len(df_out)} rows → {excel_path}, {csv_path}")
+    print(f"✅ Unified Excel + CSV exported: {excel_path}")
