@@ -9,14 +9,16 @@ OUTPUT_DIR = "outputs"
 
 def main():
     all_records = []
+    docx_files = []
     for file in tqdm(os.listdir(DATA_DIR), desc="Processing DOCX files"):
         if file.lower().endswith(".docx"):
             path = os.path.join(DATA_DIR, file)
+            docx_files.append(path)
             text = read_docx_text(path)
             dogs = parse_greyhound_data(text)
             all_records.extend(dogs)
 
-    merge_sort_and_export(all_records, OUTPUT_DIR)
+    merge_sort_and_export(all_records, OUTPUT_DIR, docx_files)
 
 if __name__ == "__main__":
     main()
