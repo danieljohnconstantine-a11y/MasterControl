@@ -70,7 +70,7 @@ def merge_sort_and_export(records: List[Dict], output_dir: str) -> None:
     notes = [
         f"Exported columns={len(df_out.columns)} (ordered first {len(COLUMN_ORDER)}).",
         "Sorted by Track → Race_No → Box.",
-        "Speed fields computed from race time and distance.",
+        "Only real DOCX data extracted - no computed or filled values.",
     ]
     _audit(df_out, output_dir, notes)
     

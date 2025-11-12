@@ -118,6 +118,7 @@ def parse_greyhound_data(text: str) -> List[Dict]:
             }
 
             # --- Historical extraction (multiple possible per dog) ---
+            # Extract all historical race entries found in dog section
             hist_entries = []
             for hm in hist_line_re.finditer(dog_section):
                 hist_entries.append({
@@ -130,18 +131,11 @@ def parse_greyhound_data(text: str) -> List[Dict]:
                     "Hist_Odds": hm.group(7),
                     "Hist_Winner": hm.group(8).strip(),
                 })
+            # If historical data found, use the first entry's values
             if hist_entries:
                 last = hist_entries[0]
                 for k, v in last.items():
                     record[k] = v
-                # optional derived speed
-                try:
-                    sec = float(last["Hist_Race_Time"].replace(":", ".")) if last["Hist_Race_Time"] else 0
-                    dist = int(last["Hist_Distance"])
-                    if sec:
-                        record["Max_Speed_km/h"] = round((dist / sec) * 3.6, 2)
-                except Exception:
-                    pass
 
             all_dogs.append(record)
 

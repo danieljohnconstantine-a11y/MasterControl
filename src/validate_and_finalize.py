@@ -18,30 +18,17 @@ def _to_seconds(time_str: str) -> float:
         return 0.0
 
 def compute_speed_fields(df: pd.DataFrame) -> pd.DataFrame:
-    """Derive Avg/Min/Max speed (km/h) from available race time & distance data."""
-    import numpy as np
+    """
+    NO-OP function - speed fields are NOT computed or filled.
     
-    speeds = []
-    for _, row in df.iterrows():
-        dist = row.get("Hist_Distance")
-        t = row.get("Hist_Race_Time")
-        try:
-            dist_m = int(str(dist).strip().replace("m", ""))
-            secs = _to_seconds(str(t))
-            speed = (dist_m / secs) * 3.6 if secs > 0 else np.nan
-        except Exception:
-            speed = np.nan
-        speeds.append(speed)
-    df["Computed_Speed_km/h"] = speeds
+    Previously computed Avg/Min/Max speed fields from race time & distance data.
+    Now disabled to preserve only authentic DOCX values per Phase 6 requirements.
     
-    # Fill missing or empty speed fields with computed values
-    for col in ["Avg_Speed_km/h", "Max_Speed_km/h", "Min_Speed_km/h"]:
-        if col in df.columns:
-            # Replace empty strings with NaN, then fill with computed speed
-            df[col] = df[col].replace(["", None], np.nan)
-            df[col] = df[col].fillna(df["Computed_Speed_km/h"])
-    
-    return df.drop(columns=["Computed_Speed_km/h"], errors="ignore")
+    Only real values from DOCX are preserved. This function is kept for 
+    backward compatibility but does nothing.
+    """
+    # Return dataframe unchanged - no artificial data generation
+    return df
 
 def validate_dataset(df: pd.DataFrame, output_dir: str) -> None:
     """Validate per-race completeness and column fill rates."""
