@@ -4,7 +4,7 @@ Export data to Excel and CSV using locked schema.
 import pandas as pd
 import os
 from datetime import datetime
-from src.columns import COLUMN_ORDER
+from columns import COLUMN_ORDER
 
 
 def merge_summary_and_aggregates(summary_rows: list, aggregates_df: pd.DataFrame) -> pd.DataFrame:
@@ -15,7 +15,7 @@ def merge_summary_and_aggregates(summary_rows: list, aggregates_df: pd.DataFrame
     df_summary = pd.DataFrame(summary_rows)
     
     if df_summary.empty:
-        return pd.DataFrame(columns=COLUMN_ORDER)
+        return pd.DataFrame(columns=COLUMN_ORDER), 0
     
     # Merge with aggregates if available
     if not aggregates_df.empty:

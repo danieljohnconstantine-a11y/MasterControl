@@ -1,79 +1,108 @@
 """
-Main Pipeline Entry Point
-Clean rebuild: 100% DOCX extraction with locked 58-column schema
+Main pipeline for DOCX to Excel/CSV extraction.
+Clean rebuild - uses locked 58-column schema.
 """
+import sys
 import os
-from src.read_docx import read_all_docx_files
-from src.parse_docx import parse_docx_blocks
-from src.aggregate_history import aggregate_history_per_dog
-from src.export_to_excel import export_to_excel_csv
-from src.validation_and_audit import write_audit_log, write_validation_report, write_consistency_check
 
-DATA_DIR = "data"
-OUTPUT_DIR = "outputs"
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from read_docx_new import read_all_docx_files
+from parse_docx_new import parse_all_files
+from aggregate_history_new import aggregate_history
+from export_to_excel_new import merge_summary_and_aggregates, export_to_excel_csv
+from validation_and_audit_new import (
+    create_audit_log, write_audit_logs, validate_data_quality, write_consistency_check
+)
 
 
 def main():
+    """
+    Main pipeline execution.
+    """
     print("=" * 60)
     print(" GREYHOUND RACING DOCX → EXCEL/CSV PIPELINE")
-    print(" Clean Rebuild - 100% Data Extraction")
     print("=" * 60)
     print()
     
     # Step 1: Read all DOCX files
-    print("📄 Step 1: Reading DOCX files...")
-    docx_files = read_all_docx_files(DATA_DIR)
-    print(f"   Found {len(docx_files)} DOCX files")
+    print("📄 Reading DOCX files from data/...")
+    files_data = read_all_docx_files("data")
     
-    # Step 2: Parse blocks into summary and history rows
-    print("\n🔍 Step 2: Parsing DOCX content...")
-    all_summary_rows = []
-    all_history_rows = []
-    all_unparsed = []
+    if not files_data:
+        print("❌ No DOCX files found in data/ directory")
+        return
     
-    for filename, blocks in docx_files:
-        print(f"   Processing: {filename}")
-        summary_rows, history_rows, unparsed = parse_docx_blocks(blocks)
-        all_summary_rows.extend(summary_rows)
-        all_history_rows.extend(history_rows)
-        all_unparsed.extend(unparsed)
-        print(f"      → {len(summary_rows)} dogs, {len(history_rows)} history rows, {len(unparsed)} unparsed")
+    print(f"✅ Read {len(files_data)} DOCX file(s)")
+    for filename in files_data.keys():
+        print(f"   - {filename}")
+    print()
     
-    print(f"\n   Total: {len(all_summary_rows)} summary rows, {len(all_history_rows)} history rows")
-    if all_unparsed:
-        print(f"   ⚠️  {len(all_unparsed)} unparsed lines (see audit log)")
+    # Step 2: Parse into summary and history rows
+    print("🔍 Parsing DOCX content...")
+    summary_rows, history_rows, unparsed = parse_all_files(files_data)
     
-    # Step 3: Aggregate history data
-    print("\n⚡ Step 3: Computing speed aggregates...")
-    all_summary_rows = aggregate_history_per_dog(all_summary_rows, all_history_rows)
-    dogs_with_speed = sum(1 for row in all_summary_rows if row.get("Avg_Speed_km/h", ""))
-    print(f"   Computed speeds for {dogs_with_speed} dogs")
+    print(f"✅ Extracted {len(summary_rows)} summary rows (dogs)")
+    print(f"✅ Extracted {len(history_rows)} history rows")
     
-    # Step 4: Export to Excel and CSV
-    print("\n📊 Step 4: Exporting to Excel and CSV...")
-    excel_path, csv_path, export_stats = export_to_excel_csv(all_summary_rows, OUTPUT_DIR)
-    print(f"   ✓ Excel: {excel_path}")
-    print(f"   ✓ CSV:   {csv_path}")
-    print(f"   → {export_stats['total_rows']} rows (dropped {export_stats['duplicates_dropped']} duplicates)")
-    print(f"   → {export_stats['columns_exported']} columns (locked schema)")
+    if unparsed:
+        total_unparsed = sum(len(lines) for lines in unparsed.values())
+        print(f"⚠️  {total_unparsed} unparsed lines (see logs for details)")
+    print()
     
-    # Step 5: Write audit and validation logs
-    print("\n📝 Step 5: Writing audit and validation logs...")
-    audit_path = write_audit_log(docx_files, all_summary_rows, all_history_rows, all_unparsed, export_stats)
-    print(f"   ✓ Audit log: {audit_path}")
+    # Step 3: Aggregate history to compute speed statistics
+    print("📊 Aggregating historical data...")
+    aggregates_df = aggregate_history(history_rows)
     
-    validation_path = write_validation_report(all_summary_rows)
-    print(f"   ✓ Validation report: {validation_path}")
+    if not aggregates_df.empty:
+        print(f"✅ Computed speed statistics for {len(aggregates_df)} dogs")
+    else:
+        print("⚠️  No speed data computed (insufficient historical data)")
+    print()
     
-    consistency_path, status = write_consistency_check(all_summary_rows, docx_files)
-    print(f"   ✓ Consistency check: {consistency_path}")
-    print(f"   → Status: {status}")
+    # Step 4: Merge and export
+    print("💾 Merging and exporting to Excel/CSV...")
+    df_final, dup_count = merge_summary_and_aggregates(summary_rows, aggregates_df)
     
-    print("\n" + "=" * 60)
-    print("✅ Pipeline complete!")
-    print(f"   Output files in: {OUTPUT_DIR}/")
-    print(f"   Logs in: {OUTPUT_DIR}/logs/")
+    export_stats = export_to_excel_csv(df_final)
+    export_stats['duplicates_dropped'] = dup_count
+    
+    print(f"✅ Exported {export_stats['total_rows']} rows × {export_stats['columns']} columns")
+    print(f"   Excel: {export_stats['excel_path']}")
+    print(f"   CSV: {export_stats['csv_path']}")
+    
+    if dup_count > 0:
+        print(f"   Dropped {dup_count} duplicate rows")
+    print()
+    
+    # Step 5: Validation and audit logging
+    print("📝 Writing audit logs and validation reports...")
+    
+    audit = create_audit_log(summary_rows, history_rows, unparsed, export_stats, df_final)
+    write_audit_logs(audit, unparsed)
+    
+    validation = validate_data_quality(df_final)
+    write_consistency_check(audit, validation)
+    
+    print()
     print("=" * 60)
+    print("✅ Pipeline complete!")
+    print("=" * 60)
+    print()
+    print("Output files:")
+    print(f"  {export_stats['excel_path']}")
+    print(f"  {export_stats['csv_path']}")
+    print()
+    print("Logs:")
+    print("  outputs/logs/parse_audit.txt")
+    print("  outputs/logs/validation_report.txt")
+    print("  outputs/logs/consistency_check.txt")
+    
+    if unparsed:
+        print("  outputs/logs/unparsed_lines.txt")
+    
+    print()
 
 
 if __name__ == "__main__":
