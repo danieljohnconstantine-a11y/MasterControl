@@ -87,7 +87,16 @@ def merge_sort_and_export(summary_rows: List[Dict], history_rows: List[Dict], ou
     else:
         df = df_history
     
-    # Ensure all 56 COLUMN_ORDER fields exist (add missing as empty strings)
+    # Add metadata fields
+    parse_timestamp = datetime.now().isoformat(timespec="seconds")
+    df["Parse_Timestamp"] = parse_timestamp
+    
+    # Add Data_Source_File from the original summary_rows if available
+    # Otherwise, leave blank
+    if not df.empty and "Data_Source_File" not in df.columns:
+        df["Data_Source_File"] = ""
+    
+    # Ensure all COLUMN_ORDER fields exist (add missing as empty strings)
     for col in COLUMN_ORDER:
         if col not in df.columns:
             df[col] = ""
@@ -143,7 +152,7 @@ def merge_sort_and_export(summary_rows: List[Dict], history_rows: List[Dict], ou
         f"History rows extracted: {len(history_rows)}",
         f"Dropped {duplicates_dropped} duplicate rows on (Track, Race_Date, Race_No, Box, Dog_Name).",
         "Sorted strictly by Track → Race_Date (as date) → Race_No (numeric) → Box (numeric).",
-        "Unified single-sheet export; simplified sort/export path.",
+        "Final locked schema with metadata fields (Data_Source_File, Parse_Timestamp).",
         "Real DOCX data extracted with computed speed aggregation from historical rows.",
     ]
     _audit(df, output_dir, notes, len(summary_rows), len(history_rows))
