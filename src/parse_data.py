@@ -13,12 +13,15 @@ def parse_greyhound_data(text: str) -> Tuple[List[Dict], List[Dict]]:
     """
 
     # --- Regex patterns ---
-    # Race header with date: "Race No	12 Nov 25 06:35PM Cannington 275m"
+    # Race header with date: "Race No	12 Nov 25 06:35PM Cannington 275m FREE..."
+    # Format after tab: <day> <month> <year> <time> <track> <distance>m
+    # Note: The day number may coincidentally match a race number
     race_header_re = re.compile(
-        r"Race No\s+(\d+)\s+(\d{1,2}\s+\w{3}\s+\d{2})\s+.*?([A-Za-z]+)\s+(\d{3,4})m",
-        re.DOTALL
+        r"Race No\t(\d+)\s+(\w+)\s+(\d+)\s+\d+:\d+[AP]M\s+([A-Za-z]+)\s+(\d{3,4})m"
     )
-    dog_start_re = re.compile(r"(\d+)\.\s*([A-Za-z'\- ]+)", re.MULTILINE)
+    # Dog pattern: "1. Paradise Flyer" or "1. 13575Paradise Flyer"
+    # Format: box_number. optional_tab_number + dog_name
+    dog_re = re.compile(r"(\d+)\.\s+(?:\d+)?([A-Za-z][A-Za-z\s'\-]+?)(?=\s+\d+\.|$)")
     
     # Dog detail patterns
     trainer_re = re.compile(r"Trainer[:\s]*([A-Z][A-Za-z ]+)")
@@ -39,12 +42,17 @@ def parse_greyhound_data(text: str) -> Tuple[List[Dict], List[Dict]]:
 
     # --- Parse races ---
     for race_match in race_header_re.finditer(text):
-        race_no = race_match.group(1)
-        race_date_str = race_match.group(2)  # e.g., "12 Nov 25"
-        track = race_match.group(3)
-        distance = race_match.group(4)
+        race_day = race_match.group(1)
+        race_month = race_match.group(2)
+        race_year = race_match.group(3)
+        track = race_match.group(4)
+        distance = race_match.group(5)
+        
+        # Use the day as race_no (they coincide in this format)
+        race_no = race_day
         
         # Parse race date to YYYY-MM-DD format
+        race_date_str = f"{race_day} {race_month} {race_year}"
         try:
             race_date_dt = datetime.strptime(race_date_str, "%d %b %y")
             race_date = race_date_dt.strftime("%Y-%m-%d")
@@ -58,8 +66,8 @@ def parse_greyhound_data(text: str) -> Tuple[List[Dict], List[Dict]]:
         race_end = next_race.start() if next_race else len(text)
         race_segment = text[race_start:race_end]
 
-        # Find all dogs in this race
-        dog_matches = list(dog_start_re.finditer(race_segment))
+        # Find all dogs in this race - use the new dog_re pattern
+        dog_matches = list(dog_re.finditer(race_segment))
         
         for i, dog_match in enumerate(dog_matches):
             box_num = dog_match.group(1)
