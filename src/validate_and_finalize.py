@@ -156,6 +156,7 @@ def validate_consistency(df: pd.DataFrame, docx_files: list, output_dir: str) ->
 def validate_consistency(df: pd.DataFrame, output_dir: str, docx_file_count: int) -> None:
     """
     Cross-check DOCX vs Excel counts and log consistency results.
+    Phase 7: Add comprehensive quality assurance validation.
     
     Args:
         df: The exported DataFrame
@@ -170,10 +171,80 @@ def validate_consistency(df: pd.DataFrame, output_dir: str, docx_file_count: int
     unique_tracks = int(df["Track"].nunique()) if "Track" in df.columns else 0
     unique_races = int(df.groupby("Track")["Race_No"].nunique().sum()) if "Track" in df.columns and "Race_No" in df.columns else 0
     
-    # Count rows with speed data
-    speed_cols = ["Hist_Speed_km/h", "Avg_Speed_km/h", "Min_Speed_km/h", "Max_Speed_km/h"]
-    rows_with_speed = sum(df[col].notna().any() for col in speed_cols if col in df.columns)
+    # Count dogs with speed data (any of Avg/Min/Max Speed_km/h)
+    dogs_with_speed = 0
+    speed_cols = ["Avg_Speed_km/h", "Min_Speed_km/h", "Max_Speed_km/h"]
+    if all(col in df.columns for col in speed_cols):
+        dogs_with_speed = int(df[speed_cols].notna().any(axis=1).sum())
     
+    speed_percentage = (dogs_with_speed / unique_dogs * 100) if unique_dogs > 0 else 0
+    
+    # Phase 7 Validation checks
+    warnings = []
+    validation_status = "OK"
+    
+    # Check 1: Verify total dogs > 0
+    if unique_dogs == 0:
+        warnings.append(f"WARN: Total dogs = 0. No dogs extracted from DOCX files.")
+        validation_status = "WARN"
+    
+    # Check 2: Verify >= 2 unique tracks (multi-DOCX check)
+    if unique_tracks < 2:
+        warnings.append(f"WARN: Unique tracks = {unique_tracks}. Expected >= 2 for multi-DOCX processing. Found tracks: {df['Track'].unique().tolist() if 'Track' in df.columns else []}")
+        validation_status = "WARN"
+    
+    # Check 3: Verify >= 20% dogs have speed data
+    if speed_percentage < 20.0:
+        warnings.append(f"WARN: Speed data coverage = {speed_percentage:.1f}%. Expected >= 20%. Only {dogs_with_speed}/{unique_dogs} dogs have speed data (Avg/Min/Max Speed_km/h).")
+        validation_status = "WARN"
+    
+    # Check 4: Verify Race_Date parsing success >= 95%
+    race_date_success_rate = 0
+    if "Race_Date" in df.columns:
+        race_date_non_null = df["Race_Date"].notna().sum()
+        total_rows = len(df)
+        race_date_success_rate = (race_date_non_null / total_rows * 100) if total_rows > 0 else 0
+        
+        if race_date_success_rate < 95.0:
+            null_count = total_rows - race_date_non_null
+            examples = df[df["Race_Date"].isna()][["Track", "Race_No", "Dog_Name"]].head(3).to_dict(orient="records")
+            warnings.append(f"WARN: Race_Date parsing = {race_date_success_rate:.1f}%. Expected >= 95%. Found {null_count} null Race_Date values. Examples: {examples}")
+            validation_status = "WARN"
+    
+    # Check 5: Verify dates strictly non-decreasing per Track
+    if "Race_Date" in df.columns and "Track" in df.columns:
+        for track in df["Track"].unique():
+            if pd.isna(track):
+                continue
+            
+            track_df = df[df["Track"] == track].copy()
+            track_df["Race_Date_dt"] = pd.to_datetime(track_df["Race_Date"], errors="coerce")
+            track_df = track_df.dropna(subset=["Race_Date_dt"])
+            
+            if len(track_df) > 1:
+                # Check if dates are non-decreasing
+                dates_list = track_df["Race_Date_dt"].tolist()
+                if not all(dates_list[i] <= dates_list[i+1] for i in range(len(dates_list)-1)):
+                    # Find violations
+                    violations = []
+                    for i in range(len(dates_list)-1):
+                        if dates_list[i] > dates_list[i+1]:
+                            violations.append(f"{dates_list[i].date()} > {dates_list[i+1].date()}")
+                    
+                    warnings.append(f"WARN: Race_Date not strictly non-decreasing for Track '{track}'. Violations: {violations[:3]}")
+                    validation_status = "WARN"
+    
+    # Check 6: Verify no nulls in required fields
+    required_fields = ["Track", "Race_Date", "Race_No", "Box", "Dog_Name"]
+    for field in required_fields:
+        if field in df.columns:
+            null_count = df[field].isna().sum()
+            if null_count > 0:
+                examples = df[df[field].isna()][required_fields].head(3).to_dict(orient="records")
+                warnings.append(f"WARN: Required field '{field}' has {null_count} null values. Examples: {examples}")
+                validation_status = "WARN"
+    
+    # Build consistency report
     consistency_report = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "docx_files_processed": int(docx_file_count),
@@ -182,16 +253,26 @@ def validate_consistency(df: pd.DataFrame, output_dir: str, docx_file_count: int
         "unique_tracks": int(unique_tracks),
         "unique_races": int(unique_races),
         "columns_exported": int(len(df.columns)),
-        "speed_fields_populated": bool(rows_with_speed > 0),
-        "checks": {
-            "has_data": bool(len(df) > 0),
-            "has_track_info": bool(df["Track"].notna().any()) if "Track" in df.columns else False,
-            "has_dog_names": bool(df["Dog_Name"].notna().any()) if "Dog_Name" in df.columns else False,
-            "has_speed_data": bool(rows_with_speed > 0),
-        }
+        "dogs_with_speed_data": int(dogs_with_speed),
+        "speed_data_percentage": round(speed_percentage, 1),
+        "race_date_parsing_success_rate": round(race_date_success_rate, 1),
+        "validation_checks": {
+            "total_dogs_gt_0": bool(unique_dogs > 0),
+            "unique_tracks_gte_2": bool(unique_tracks >= 2),
+            "speed_coverage_gte_20pct": bool(speed_percentage >= 20.0),
+            "race_date_parsing_gte_95pct": bool(race_date_success_rate >= 95.0),
+            "no_nulls_in_required_fields": bool(len([w for w in warnings if "Required field" in w]) == 0),
+        },
+        "warnings": warnings,
+        "STATUS": validation_status,
     }
     
     with open(consistency_path, "a", encoding="utf-8") as f:
+        f.write("=== PHASE 7 VALIDATION & QUALITY ASSURANCE ===\n\n")
         f.write(json.dumps(consistency_report, ensure_ascii=False, indent=2) + "\n")
+        f.write(f"\nSTATUS = {validation_status}\n")
     
-    print(f"📊 Consistency check complete → {consistency_path}")
+    if validation_status == "WARN":
+        print(f"⚠️  Consistency check complete with WARNINGS → {consistency_path}")
+    else:
+        print(f"✅ Consistency check complete (STATUS: OK) → {consistency_path}")
