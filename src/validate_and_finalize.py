@@ -20,15 +20,16 @@ def _to_seconds(time_str: str) -> float:
 
 def compute_speed_fields(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute speed fields from historical race data.
+    Compute speed fields from historical race data with per-dog-per-meeting aggregation.
     
     For each row:
     - Calculate Hist_Speed_km/h = (distance_meters / time_seconds) * 3.6
     
-    Then aggregate per dog (by Dog_Name):
-    - Avg_Speed_km/h = average of all Hist_Speed_km/h values
+    Then aggregate per dog per meeting (grouped by Track, Race_Date, Race_No, Box, Dog_Name):
+    - Avg_Speed_km/h = average of all Hist_Speed_km/h values for that dog in that meeting
     - Min_Speed_km/h = minimum of all Hist_Speed_km/h values  
     - Max_Speed_km/h = maximum of all Hist_Speed_km/h values
+    - Hist_Count = number of historical races with valid speed data
     
     Only computes from real DOCX data - does not fill NaN defaults.
     """
@@ -55,24 +56,31 @@ def compute_speed_fields(df: pd.DataFrame) -> pd.DataFrame:
     
     df["Hist_Speed_km/h"] = speeds
     
-    # Aggregate per dog: compute Avg/Min/Max from Hist_Speed_km/h values
-    # Group by Dog_Name and calculate stats
-    if "Dog_Name" in df.columns and "Hist_Speed_km/h" in df.columns:
-        # Create aggregation groups
-        dog_speed_stats = df.groupby("Dog_Name", as_index=False).agg({
-            "Hist_Speed_km/h": ["mean", "min", "max"]
-        })
+    # Aggregate per dog per meeting: group by (Track, Race_Date, Race_No, Box, Dog_Name)
+    grouping_cols = ["Track", "Race_Date", "Race_No", "Box", "Dog_Name"]
+    
+    # Check which grouping columns exist
+    available_grouping_cols = [col for col in grouping_cols if col in df.columns]
+    
+    if available_grouping_cols and "Hist_Speed_km/h" in df.columns:
+        # Create aggregation groups - only count non-null speeds for Hist_Count
+        agg_dict = {
+            "Hist_Speed_km/h": ["mean", "min", "max", "count"]
+        }
+        
+        dog_meeting_stats = df.groupby(available_grouping_cols, as_index=False, dropna=False).agg(agg_dict)
         
         # Flatten column names
-        dog_speed_stats.columns = ["Dog_Name", "Avg_Speed_km/h", "Min_Speed_km/h", "Max_Speed_km/h"]
+        new_cols = available_grouping_cols + ["Avg_Speed_km/h", "Min_Speed_km/h", "Max_Speed_km/h", "Hist_Count"]
+        dog_meeting_stats.columns = new_cols
         
         # Merge back into main dataframe (left join to preserve all rows)
         # Drop existing speed columns if present
-        for col in ["Avg_Speed_km/h", "Min_Speed_km/h", "Max_Speed_km/h"]:
+        for col in ["Avg_Speed_km/h", "Min_Speed_km/h", "Max_Speed_km/h", "Hist_Count"]:
             if col in df.columns:
                 df = df.drop(columns=[col])
         
-        df = df.merge(dog_speed_stats, on="Dog_Name", how="left")
+        df = df.merge(dog_meeting_stats, on=available_grouping_cols, how="left")
     
     return df
 

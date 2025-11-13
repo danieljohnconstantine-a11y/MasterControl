@@ -10,11 +10,21 @@ def _audit(df: pd.DataFrame, output_dir: str, notes: List[str], summary_count: i
     """Write audit log with timestamp, row count, missing columns, notes, and samples."""
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     audit_path = os.path.join(output_dir, "logs", "parse_audit.txt")
+    
+    # Calculate speed data statistics
+    dogs_with_speed = 0
+    if "Avg_Speed_km/h" in df.columns:
+        dogs_with_speed = df["Avg_Speed_km/h"].notna().sum()
+    
+    speed_pct = (dogs_with_speed / len(df) * 100) if len(df) > 0 else 0
+    
     summary = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "total_rows": int(len(df)),
         "summary_rows": summary_count,
         "history_rows": history_count,
+        "dogs_with_speed_data": int(dogs_with_speed),
+        "speed_data_percentage": round(speed_pct, 1),
         "missing_columns": [c for c in COLUMN_ORDER if c not in df.columns],
         "notes": notes,
         "samples": df.head(5).to_dict(orient="records"),
@@ -56,7 +66,7 @@ def merge_sort_and_export(summary_rows: List[Dict], history_rows: List[Dict], ou
     else:
         df = df_history
     
-    # Ensure all 53 COLUMN_ORDER fields exist (add missing as empty strings)
+    # Ensure all 56 COLUMN_ORDER fields exist (add missing as empty strings)
     for col in COLUMN_ORDER:
         if col not in df.columns:
             df[col] = ""
