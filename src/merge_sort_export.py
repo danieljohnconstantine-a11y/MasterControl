@@ -6,13 +6,15 @@ from typing import List, Dict
 from .columns import COLUMN_ORDER
 from .validate_and_finalize import compute_speed_fields, validate_dataset, validate_consistency
 
-def _audit(df: pd.DataFrame, output_dir: str, notes: List[str]) -> None:
+def _audit(df: pd.DataFrame, output_dir: str, notes: List[str], summary_count: int = 0, history_count: int = 0) -> None:
     """Write audit log with timestamp, row count, missing columns, notes, and samples."""
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     audit_path = os.path.join(output_dir, "logs", "parse_audit.txt")
     summary = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "rows": int(len(df)),
+        "total_rows": int(len(df)),
+        "summary_rows": summary_count,
+        "history_rows": history_count,
         "missing_columns": [c for c in COLUMN_ORDER if c not in df.columns],
         "notes": notes,
         "samples": df.head(5).to_dict(orient="records"),
@@ -21,24 +23,38 @@ def _audit(df: pd.DataFrame, output_dir: str, notes: List[str]) -> None:
         f.write(json.dumps(summary, ensure_ascii=False) + "\n")
     print(f"📝 Audit written → {audit_path}")
 
-def merge_sort_and_export(records: List[Dict], output_dir: str, docx_files: List[str] = None) -> None:
+def merge_sort_and_export(summary_rows: List[Dict], history_rows: List[Dict], output_dir: str, docx_files: List[str] = None) -> None:
     """
-    Consolidate records, enforce unified schema, sort, and export to Excel/CSV.
+    Consolidate summary and history records, merge them, enforce unified schema, sort, and export to Excel/CSV.
     
     Maintains audit logging and validation while using simplified sorting/export path.
     
     Args:
-        records: List of dictionaries containing parsed data
+        summary_rows: List of dictionaries containing dog summary data (Groups A+B)
+        history_rows: List of dictionaries containing historical race data (Group C)
         output_dir: Directory for output files
         docx_files: Optional list of DOCX file paths that were processed
     """
-    if not records:
+    if not summary_rows and not history_rows:
         print("⚠️ No records found to export.")
-        _audit(pd.DataFrame(), output_dir, ["No records"])
+        _audit(pd.DataFrame(), output_dir, ["No records"], 0, 0)
         return
 
-    # Create DataFrame from parsed records
-    df = pd.DataFrame(records)
+    # Create DataFrames from parsed records
+    df_summary = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
+    df_history = pd.DataFrame(history_rows) if history_rows else pd.DataFrame()
+    
+    # Merge summary and history data on Dog_Name and Tab_No
+    if not df_summary.empty and not df_history.empty:
+        # Merge history into summary, keeping all summary records
+        df = pd.merge(df_summary, df_history, on=["Dog_Name", "Tab_No"], how="left", suffixes=('', '_hist'))
+        # For columns that appear in both, prefer summary version (already done by suffixes)
+        # Drop any _hist duplicates
+        df = df[[c for c in df.columns if not c.endswith('_hist')]]
+    elif not df_summary.empty:
+        df = df_summary
+    else:
+        df = df_history
     
     # Ensure all 53 COLUMN_ORDER fields exist (add missing as empty strings)
     for col in COLUMN_ORDER:
@@ -73,11 +89,13 @@ def merge_sort_and_export(records: List[Dict], output_dir: str, docx_files: List
     # Audit logging
     notes = [
         f"Exported columns={len(df.columns)} (unified schema with {len(COLUMN_ORDER)} fields).",
+        f"Summary rows extracted: {len(summary_rows)}",
+        f"History rows extracted: {len(history_rows)}",
         "Sorted by Track → Race_No → Box.",
         "Unified single-sheet export; simplified sort/export path.",
         "Real DOCX data extracted with computed speed aggregation from historical rows.",
     ]
-    _audit(df, output_dir, notes)
+    _audit(df, output_dir, notes, len(summary_rows), len(history_rows))
     
     # Validation reporting
     validate_dataset(df, output_dir)
