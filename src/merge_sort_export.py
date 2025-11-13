@@ -18,13 +18,34 @@ def _audit(df: pd.DataFrame, output_dir: str, notes: List[str], summary_count: i
     
     speed_pct = (dogs_with_speed / len(df) * 100) if len(df) > 0 else 0
     
+    # Calculate unique tracks
+    unique_tracks = int(df["Track"].nunique()) if "Track" in df.columns and not df.empty else 0
+    
+    # Calculate unique meetings (Track + Race_Date combinations)
+    unique_meetings = 0
+    if "Track" in df.columns and "Race_Date" in df.columns and not df.empty:
+        unique_meetings = int(df.groupby(["Track", "Race_Date"]).ngroups)
+    
+    # Calculate total unique dogs
+    total_dogs = int(df["Dog_Name"].nunique()) if "Dog_Name" in df.columns and not df.empty else 0
+    
+    # Get top 5 tracks by dog count
+    top_tracks = []
+    if "Track" in df.columns and "Dog_Name" in df.columns and not df.empty:
+        track_dog_counts = df.groupby("Track")["Dog_Name"].nunique().sort_values(ascending=False).head(5)
+        top_tracks = [{"track": str(track), "dog_count": int(count)} for track, count in track_dog_counts.items()]
+    
     summary = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "total_rows": int(len(df)),
         "summary_rows": summary_count,
         "history_rows": history_count,
+        "unique_tracks": unique_tracks,
+        "unique_meetings": unique_meetings,
+        "total_unique_dogs": total_dogs,
         "dogs_with_speed_data": int(dogs_with_speed),
         "speed_data_percentage": round(speed_pct, 1),
+        "top_5_tracks_by_dog_count": top_tracks,
         "missing_columns": [c for c in COLUMN_ORDER if c not in df.columns],
         "notes": notes,
         "samples": df.head(5).to_dict(orient="records"),
@@ -77,12 +98,31 @@ def merge_sort_and_export(summary_rows: List[Dict], history_rows: List[Dict], ou
     # Reindex to enforce unified column order
     df = df.reindex(columns=COLUMN_ORDER)
     
+    # Phase 6: Drop exact duplicates on key fields
+    dedup_cols = ["Track", "Race_Date", "Race_No", "Box", "Dog_Name"]
+    duplicates_before = len(df)
+    df = df.drop_duplicates(subset=dedup_cols, keep="first")
+    duplicates_dropped = duplicates_before - len(df)
+    
+    # Phase 6: Convert Race_Date to datetime for proper sorting
+    if "Race_Date" in df.columns:
+        df["Race_Date_Sort"] = pd.to_datetime(df["Race_Date"], errors="coerce")
+    else:
+        df["Race_Date_Sort"] = pd.NaT
+    
     # Convert Race_No and Box to numeric for proper sorting (coerce errors to NaN)
     df["Race_No"] = pd.to_numeric(df["Race_No"], errors="coerce")
     df["Box"] = pd.to_numeric(df["Box"], errors="coerce")
     
-    # Sort by Track (alphabetical), Race_No (numeric), Box (numeric)
-    df = df.sort_values(by=["Track", "Race_No", "Box"], ascending=[True, True, True])
+    # Phase 6: Sort strictly by Track → Race_Date (as date) → Race_No (numeric) → Box (numeric)
+    df = df.sort_values(
+        by=["Track", "Race_Date_Sort", "Race_No", "Box"],
+        ascending=[True, True, True, True],
+        na_position="last"
+    )
+    
+    # Drop the temporary sorting column
+    df = df.drop(columns=["Race_Date_Sort"])
 
     # Prepare output paths
     os.makedirs(output_dir, exist_ok=True)
@@ -101,7 +141,8 @@ def merge_sort_and_export(summary_rows: List[Dict], history_rows: List[Dict], ou
         f"Exported columns={len(df.columns)} (unified schema with {len(COLUMN_ORDER)} fields).",
         f"Summary rows extracted: {len(summary_rows)}",
         f"History rows extracted: {len(history_rows)}",
-        "Sorted by Track → Race_No → Box.",
+        f"Dropped {duplicates_dropped} duplicate rows on (Track, Race_Date, Race_No, Box, Dog_Name).",
+        "Sorted strictly by Track → Race_Date (as date) → Race_No (numeric) → Box (numeric).",
         "Unified single-sheet export; simplified sort/export path.",
         "Real DOCX data extracted with computed speed aggregation from historical rows.",
     ]
