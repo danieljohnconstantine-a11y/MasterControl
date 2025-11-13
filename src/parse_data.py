@@ -23,10 +23,27 @@ def parse_greyhound_data(text: str) -> Tuple[List[Dict], List[Dict]]:
     # Format: box_number. optional_tab_number + dog_name
     dog_re = re.compile(r"(\d+)\.\s+(?:\d+)?([A-Za-z][A-Za-z\s'\-]+?)(?=\s+\d+\.|$)")
     
-    # Dog detail patterns
+    # Dog detail patterns - expanded for full coverage
     trainer_re = re.compile(r"Trainer[:\s]*([A-Z][A-Za-z ]+)")
     career_re = re.compile(r"Career[:\s]+(\d+\s*-\s*\d+\s*-\s*\d+)")
     prize_re = re.compile(r"Prize\s*\$?([\d,]+)")
+    tab_no_re = re.compile(r"(\d{4,5})[A-Za-z]")  # Tab number before dog name
+    ff_form_re = re.compile(r"FF[:\s]+([A-Z0-9\-]+)")
+    bp_re = re.compile(r"BP[:\s]+(\d+)")
+    age_sex_re = re.compile(r"([BDMT])[/\s]+([KF])")  # B/D/M/T for age, K/F for sex
+    weight_re = re.compile(r"(\d{2}(?:\.\d)?)\s*kg")
+    sire_re = re.compile(r"Sire[:\s]*([A-Z][A-Za-z\s]+?)(?=\s+Dam|\s+Owner|$)")
+    dam_re = re.compile(r"Dam[:\s]*([A-Z][A-Za-z\s]+?)(?=\s+Owner|$)")
+    owner_re = re.compile(r"Owner[:\s]*([A-Z][A-Za-z\s&]+?)(?=\s+[A-Z][a-z]+:|$)")
+    
+    # Group B patterns - career statistics
+    rtc_re = re.compile(r"RTC[:\s]+([\d.]+)")
+    dlr_re = re.compile(r"DLR[:\s]+([\d.]+)")
+    dlw_re = re.compile(r"DLW[:\s]+([\d.]+)")
+    api_re = re.compile(r"API[:\s]+(\d+)")
+    trainer_win_re = re.compile(r"Trainer Win %[:\s]+([\d.]+)")
+    trainer_place_re = re.compile(r"Trainer Place %[:\s]+([\d.]+)")
+    dod_re = re.compile(r"DOD[:\s]+([\d.]+)")
     
     # Historical race pattern (with margin and position)
     hist_line_re = re.compile(
