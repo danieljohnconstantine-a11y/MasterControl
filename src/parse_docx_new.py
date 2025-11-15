@@ -11,23 +11,27 @@ def parse_race_header(text: str) -> Dict[str, str]:
     """Extract race metadata from header text."""
     metadata = {}
     
-    # Pattern: "Race No 12 Nov 25 06:35PM Cannington 275m"
-    race_pattern = r'Race\s+No\.?\s*(\d+)\s+(\d{1,2}\s+\w+\s+\d{2})\s+.*?([A-Z][a-z]+)\s+(\d+)m'
+    # Pattern matches: "Race No[whitespace]12 Nov 25 06:35PM Cannington 275m"
+    # Note: "No" may be followed directly by digits or by whitespace then digits
+    race_pattern = r'Race\s+No\s*(\d+)\s+(\d{1,2}\s+\w+\s+\d{2})\s+\d{1,2}:\d{2}[AP]M\s+([\w\s]+?)\s+(\d+)m'
     match = re.search(race_pattern, text, re.IGNORECASE)
     
     if match:
         metadata['Race_No'] = match.group(1)
         
-        # Parse date
-        date_str = match.group(2)
+        # Parse date "12 Nov 25" -> "2025-11-12"
+        date_str = match.group(2).strip()
         try:
-            # Try parsing "12 Nov 25" format
             date_obj = datetime.strptime(date_str, "%d %b %y")
             metadata['Race_Date'] = date_obj.strftime("%Y-%m-%d")
         except:
             metadata['Race_Date'] = ""
         
-        metadata['Track'] = match.group(3)
+        # Track name might have extra text after it - take just the track name
+        track_raw = match.group(3).strip()
+        # Split on common separators and take first part
+        track = track_raw.split(' FREE')[0].split(' ENTRY')[0].split(' TAB')[0].strip()
+        metadata['Track'] = track
         metadata['Distance_m'] = match.group(4)
     
     return metadata
@@ -37,19 +41,28 @@ def parse_dog_line(text: str, race_metadata: Dict[str, str]) -> Dict[str, Any]:
     """Parse a single dog entry line."""
     dog_data = race_metadata.copy()
     
-    # Pattern for numbered dog entry: "1. DOG NAME ..."
-    dog_pattern = r'^(\d+)\.\s+([A-Z][A-Z\s\'-]+)'
+    # Pattern for numbered dog entry: "1. 13575Paradise Flyer" or "1. Paradise Flyer"
+    # Updated to handle Tab_No directly embedded before dog name
+    dog_pattern = r'^(\d+)\.\s+(\d+)([A-Z][A-Za-z\s\'-]+)'
     match = re.match(dog_pattern, text)
     
     if match:
         dog_data['Box'] = match.group(1)
-        dog_data['Dog_Name'] = match.group(2).strip()
-    
-    # Extract Tab_No
-    tab_pattern = r'T(?:ab)?:?\s*(\d+)'
-    tab_match = re.search(tab_pattern, text)
-    if tab_match:
-        dog_data['Tab_No'] = tab_match.group(1)
+        dog_data['Tab_No'] = match.group(2)
+        dog_data['Dog_Name'] = match.group(3).strip()
+    else:
+        # Fallback: try without Tab_No embedded
+        dog_pattern_simple = r'^(\d+)\.\s+([A-Z][A-Za-z\s\'-]+)'
+        match_simple = re.match(dog_pattern_simple, text)
+        if match_simple:
+            dog_data['Box'] = match_simple.group(1)
+            dog_data['Dog_Name'] = match_simple.group(2).strip()
+            
+            # Extract Tab_No from text if present
+            tab_pattern = r'T(?:ab)?:?\s*(\d+)'
+            tab_match = re.search(tab_pattern, text)
+            if tab_match:
+                dog_data['Tab_No'] = tab_match.group(1)
     
     # Extract Trainer
     trainer_pattern = r'(?:Trainer|Trnr):?\s*([A-Z][A-Za-z\s\'-]+?)(?:\s+\(|$|\s+[A-Z]{2})'
@@ -179,15 +192,36 @@ def parse_docx_blocks(blocks: List[Dict[str, Any]], source_file: str) -> Tuple[L
         
         # Parse paragraphs
         elif block_type == 'paragraph':
-            # Check if it's a dog line
+            # Check if it's a dog line - may contain multiple dogs like "1. 13575Paradise Flyer 2. 55672Predator Gundi"
             if re.match(r'^\d+\.', raw_text):
-                dog_info = parse_dog_line(raw_text, race_metadata)
-                dog_info['Data_Source_File'] = source_file
+                # Split on dog number pattern to handle multiple dogs per line
+                dog_pattern = r'(\d+)\.\s*(\d+)([A-Za-z\s\'\-]+?)(?=\s+\d+\.\s*\d+|\s*$)'
+                matches = re.finditer(dog_pattern, raw_text)
                 
-                if dog_info.get('Dog_Name'):
-                    summary_rows.append(dog_info)
-                    current_dog = dog_info
-                else:
+                for match in matches:
+                    box = match.group(1)
+                    tab_no = match.group(2)
+                    dog_name = match.group(3).strip()
+                    
+                    if dog_name:
+                        dog_info = race_metadata.copy()
+                        dog_info['Box'] = box
+                        dog_info['Tab_No'] = tab_no
+                        dog_info['Dog_Name'] = dog_name
+                        dog_info['Data_Source_File'] = source_file
+                        
+                        summary_rows.append(dog_info)
+                        current_dog = dog_info
+                
+                # If no matches with the pattern, try original single-dog parsing
+                if not list(re.finditer(dog_pattern, raw_text)):
+                    dog_info = parse_dog_line(raw_text, race_metadata)
+                    dog_info['Data_Source_File'] = source_file
+                    
+                    if dog_info.get('Dog_Name'):
+                        summary_rows.append(dog_info)
+                        current_dog = dog_info
+                    else:
                     unparsed.append(f"Dog line unparsed: {raw_text}")
     
     return summary_rows, history_rows, unparsed

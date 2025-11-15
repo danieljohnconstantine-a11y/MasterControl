@@ -6,6 +6,22 @@ import os
 from datetime import datetime
 from typing import Dict, List
 import pandas as pd
+import numpy as np
+
+
+def convert_to_serializable(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, (np.integer, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    return obj
 
 
 def create_audit_log(summary_rows: List[Dict], history_rows: List[Dict], 
@@ -65,7 +81,9 @@ def write_audit_logs(audit: Dict, unparsed: Dict, output_dir: str = "outputs/log
     # Write parse audit
     audit_path = os.path.join(output_dir, "parse_audit.txt")
     with open(audit_path, 'w') as f:
-        json.dump(audit, f, indent=2)
+        # Convert numpy types to native Python types
+        serializable_audit = convert_to_serializable(audit)
+        json.dump(serializable_audit, f, indent=2)
     
     # Write unparsed lines
     if unparsed:

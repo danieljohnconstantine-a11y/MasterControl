@@ -29,25 +29,36 @@ def parse_docx_content(extraction_result):
     distance = ""
     
     for para in paragraphs[:10]:  # Check first 10 paragraphs for race info
-        # Pattern: "Race No	12 Nov 25 06:35PM Cannington 275m"
-        race_match = re.search(r'Race\s+No\s+(\d+)\s+(\d{1,2}\s+\w+\s+\d{2})\s+\d+:\d+\w+\s+(\w+)\s+(\d+)m', para)
+        # Pattern: "Race No	12 Nov 25 06:35PM Cannington 275m FREE ENTRY..."
+        # Format: Day Month Year Time Track Distance
+        # Example: 12 Nov 25 06:35PM Cannington 275m
+        race_match = re.search(r'Race\s+No\s+(\d{1,2})\s+(\w+)\s+(\d{2})\s+\d{1,2}:\d{2}[AP]M\s+([\w\s]+?)\s+(\d+)m', para)
         if race_match:
-            race_no = race_match.group(1)
-            date_str = race_match.group(2)
-            track = race_match.group(3)
-            distance = race_match.group(4)
+            day = race_match.group(1)
+            month = race_match.group(2)
+            year = race_match.group(3)
+            track_raw = race_match.group(4).strip()
+            distance = race_match.group(5)
             
-            # Parse date: "12 Nov 25" -> "2025-11-12"
+            # Clean track name (remove FREE, ENTRY, TAB, PARK, etc.)
+            track = track_raw.split(' FREE')[0].split(' ENTRY')[0].split(' TAB')[0].strip()
+            
+            # Parse date: day=12, month=Nov, year=25 -> "2025-11-12"
             try:
-                date_obj = datetime.strptime(date_str + " 20", "%d %b %y %y")
+                date_str = f"{day} {month} {year}"
+                date_obj = datetime.strptime(date_str, "%d %b %y")
                 race_date = date_obj.strftime("%Y-%m-%d")
             except:
-                race_date = date_str
+                race_date = ""
+            
+            # Race number not in DOCX - leave empty for now
+            race_no = ""
             break
     
     # Parse dog entries
     # Pattern: "1. 13575Paradise Flyer" or "Box. TabDogName"
-    dog_pattern = re.compile(r'(\d+)\.\s+(\d{5})([A-Za-z][A-Za-z\s\']+)')
+    # Tab number is 5 digits followed by dog name (letters, spaces, apostrophes, hyphens)
+    dog_pattern = re.compile(r'(\d+)\.\s+(\d+)([A-Za-z][A-Za-z\s\'\-]+?)(?=\s+\d+\.|$)')
     
     for para in paragraphs:
         # Skip header/metadata lines
