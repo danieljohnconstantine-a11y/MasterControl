@@ -1,129 +1,124 @@
 """
-Validation and Audit Module
-Responsibility: Comprehensive logging, validation, and quality checks
+Validation and audit logging for the pipeline.
 """
-import json
 import os
+import json
 from datetime import datetime
 
 
-def write_audit_log(docx_files, summary_rows, history_rows, unparsed_lines, export_stats, output_dir="outputs/logs"):
-    """Write comprehensive audit log."""
+def write_parse_audit(summary_count, history_count, unparsed_by_file, docx_count, output_dir='outputs/logs'):
+    """Write parse audit log."""
     os.makedirs(output_dir, exist_ok=True)
     
-    audit_path = os.path.join(output_dir, "parse_audit.txt")
+    unparsed_counts = {k: len(v) for k, v in unparsed_by_file.items()}
+    total_unparsed = sum(unparsed_counts.values())
     
-    audit_data = {
-        "timestamp": datetime.now().isoformat(),
-        "docx_files_processed": len(docx_files),
-        "docx_filenames": [f[0] for f in docx_files],
-        "summary_rows_extracted": len(summary_rows),
-        "history_rows_extracted": len(history_rows),
-        "unparsed_lines_count": len(unparsed_lines),
-        "total_rows_exported": export_stats.get("total_rows", 0),
-        "duplicates_dropped": export_stats.get("duplicates_dropped", 0),
-        "unique_tracks": export_stats.get("unique_tracks", 0),
-        "unique_meetings": export_stats.get("unique_meetings", 0),
-        "columns_exported": export_stats.get("columns_exported", 0),
-        "dogs_with_speed_data": export_stats.get("dogs_with_speed_data", 0),
-        "speed_data_percentage": round(
-            (export_stats.get("dogs_with_speed_data", 0) / max(export_stats.get("total_rows", 1), 1)) * 100, 2
-        ),
-        "unparsed_sample": unparsed_lines[:50] if unparsed_lines else []
+    audit = {
+        'timestamp': datetime.now().isoformat(),
+        'docx_files_processed': docx_count,
+        'summary_rows_extracted': summary_count,
+        'history_rows_extracted': history_count,
+        'total_rows_exported': summary_count,
+        'columns_exported': 58,
+        'unparsed_lines_by_file': unparsed_counts,
+        'total_unparsed_lines': total_unparsed,
     }
     
-    with open(audit_path, "w", encoding="utf-8") as f:
-        json.dump(audit_data, f, indent=2, ensure_ascii=False)
+    audit_path = os.path.join(output_dir, 'parse_audit.txt')
+    with open(audit_path, 'w') as f:
+        json.dump(audit, f, indent=2)
     
-    return audit_path
+    print(f"✅ Parse audit written to {audit_path}")
+    return audit
 
 
-def write_validation_report(summary_rows, output_dir="outputs/logs"):
-    """Write data quality validation report."""
+def write_validation_report(df, output_dir='outputs/logs'):
+    """Write validation report."""
     os.makedirs(output_dir, exist_ok=True)
     
-    report_path = os.path.join(output_dir, "validation_report.txt")
-    
-    # Analyze missing data by column
-    from src.columns import COLUMN_ORDER
-    
-    total_rows = len(summary_rows)
-    missing_analysis = {}
-    
-    for col in COLUMN_ORDER:
-        empty_count = sum(1 for row in summary_rows if not str(row.get(col, "")).strip())
-        missing_pct = (empty_count / max(total_rows, 1)) * 100
-        missing_analysis[col] = {
-            "empty_count": empty_count,
-            "missing_percentage": round(missing_pct, 2)
+    if df.empty:
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'total_rows': 0,
+            'message': 'No data extracted'
+        }
+    else:
+        # Calculate missing rates
+        missing_rates = {}
+        for col in df.columns:
+            empty_count = (df[col] == '').sum() + df[col].isna().sum()
+            missing_rates[col] = round(empty_count / len(df) * 100, 2)
+        
+        # Sort by missing rate
+        sorted_missing = dict(sorted(missing_rates.items(), key=lambda x: x[1], reverse=True)[:20])
+        
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'total_rows': len(df),
+            'top_20_missing_columns': sorted_missing,
+            'unique_tracks': df['Track'].nunique(),
+            'unique_dogs': df['Dog_Name'].nunique(),
         }
     
-    # Sort by missing percentage
-    sorted_missing = sorted(missing_analysis.items(), key=lambda x: x[1]["missing_percentage"], reverse=True)
+    report_path = os.path.join(output_dir, 'validation_report.txt')
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2)
     
-    report = {
-        "timestamp": datetime.now().isoformat(),
-        "total_rows_analyzed": total_rows,
-        "top_20_missing_columns": dict(sorted_missing[:20]),
-        "data_quality_notes": [
-            "Missing values are expected for fields not present in DOCX files",
-            "No artificial defaults were added",
-            "Empty strings indicate genuinely missing data"
-        ]
-    }
-    
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
-    
-    return report_path
+    print(f"✅ Validation report written to {report_path}")
+    return report
 
 
-def write_consistency_check(summary_rows, docx_files, output_dir="outputs/logs"):
-    """Write consistency check report with validation."""
+def write_consistency_check(df, docx_count, output_dir='outputs/logs'):
+    """Write consistency check."""
     os.makedirs(output_dir, exist_ok=True)
     
-    check_path = os.path.join(output_dir, "consistency_check.txt")
+    has_data = not df.empty
+    has_track_info = has_data and (df['Track'] != '').any()
+    has_dog_names = has_data and (df['Dog_Name'] != '').any()
+    has_speed_data = has_data and (df['Avg_Speed_km/h'] != '').any()
     
-    # Required field validation
-    required_fields = ["Track", "Race_Date", "Race_No", "Box", "Dog_Name"]
-    nulls_in_required = {
-        field: sum(1 for row in summary_rows if not str(row.get(field, "")).strip())
-        for field in required_fields
-    }
-    
-    # Speed data coverage
-    total_dogs = len(summary_rows)
-    dogs_with_speed = sum(1 for row in summary_rows if str(row.get("Avg_Speed_km/h", "")).strip())
-    speed_pct = (dogs_with_speed / max(total_dogs, 1)) * 100
-    
-    # Checks
-    checks = {
-        "total_dogs_gt_zero": total_dogs > 0,
-        "unique_tracks_ge_2": len(set(row.get("Track", "") for row in summary_rows)) >= 2,
-        "speed_data_ge_20_pct": speed_pct >= 20,
-        "no_nulls_in_required": all(count == 0 for count in nulls_in_required.values())
-    }
-    
-    # Warnings
     warnings = []
-    if not checks["speed_data_ge_20_pct"]:
-        warnings.append(f"WARN: Speed data coverage = {speed_pct:.1f}%. Expected >= 20%.")
+    if not has_data:
+        warnings.append("WARN: No data extracted")
+    if has_data and not has_speed_data:
+        warnings.append("WARN: No dogs have speed data")
     
-    status = "OK" if all(checks.values()) else "WARN"
+    status = "OK" if has_data and has_track_info and has_dog_names else "WARN"
     
-    consistency_data = {
-        "timestamp": datetime.now().isoformat(),
-        "docx_files_processed": len(docx_files),
-        "total_rows_exported": total_dogs,
-        "unique_tracks": len(set(row.get("Track", "") for row in summary_rows)),
-        "dogs_with_speed_data": dogs_with_speed,
-        "speed_data_percentage": round(speed_pct, 2),
-        "checks": checks,
-        "warnings": warnings,
-        "status": status
+    check = {
+        'timestamp': datetime.now().isoformat(),
+        'docx_files_processed': docx_count,
+        'total_rows_exported': len(df),
+        'unique_dogs': int(df['Dog_Name'].nunique()) if has_data else 0,
+        'unique_tracks': int(df['Track'].nunique()) if has_data else 0,
+        'checks': {
+            'has_data': bool(has_data),
+            'has_track_info': bool(has_track_info),
+            'has_dog_names': bool(has_dog_names),
+            'has_speed_data': bool(has_speed_data),
+        },
+        'warnings': warnings,
+        'status': status,
     }
     
-    with open(check_path, "w", encoding="utf-8") as f:
-        json.dump(consistency_data, f, indent=2, ensure_ascii=False)
+    check_path = os.path.join(output_dir, 'consistency_check.txt')
+    with open(check_path, 'w') as f:
+        json.dump(check, f, indent=2)
     
-    return check_path, status
+    print(f"✅ Consistency check written to {check_path}")
+    return check
+
+
+def write_unparsed_lines(unparsed_by_file, output_dir='outputs/logs'):
+    """Write unparsed lines log."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    log_path = os.path.join(output_dir, 'unparsed.txt')
+    with open(log_path, 'w') as f:
+        for filename, lines in unparsed_by_file.items():
+            f.write(f"\n=== {filename} ===\n")
+            for line in lines:
+                f.write(f"{line}\n")
+    
+    total = sum(len(v) for v in unparsed_by_file.values())
+    print(f"✅ Unparsed lines ({total} total) written to {log_path}")

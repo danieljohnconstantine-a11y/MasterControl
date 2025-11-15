@@ -1,76 +1,85 @@
 """
-Export Module
-Responsibility: Export summary data to Excel and CSV using locked schema
+Export summary and history data to Excel and CSV with locked schema.
 """
-import pandas as pd
 import os
-from src.columns import COLUMN_ORDER
+import pandas as pd
+from datetime import datetime
+from columns import COLUMN_ORDER
 
 
-def export_to_excel_csv(summary_rows, output_dir="outputs"):
+def merge_and_export(summary_rows, aggregates, output_dir='outputs'):
     """
-    Export summary rows to Excel and CSV with locked 58-column schema.
+    Merge summary rows with aggregates and export to Excel/CSV.
     
     Args:
-        summary_rows: List of dog summary dicts
+        summary_rows: List of summary row dicts
+        aggregates: Dict mapping dog keys to aggregate stats
         output_dir: Output directory path
         
     Returns:
-        tuple: (excel_path, csv_path, export_stats)
+        DataFrame of final exported data
     """
+    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.join(output_dir, 'logs'), exist_ok=True)
     
-    # Convert to DataFrame
-    df = pd.DataFrame(summary_rows)
-    
-    # Ensure all locked columns exist (fill missing with empty string)
-    for col in COLUMN_ORDER:
-        if col not in df.columns:
-            df[col] = ""
-    
-    # Reindex to locked column order
-    df = df[COLUMN_ORDER]
-    
-    # Drop exact duplicates on key fields
-    key_fields = ["Track", "Race_Date", "Race_No", "Box", "Dog_Name"]
-    initial_count = len(df)
-    df = df.drop_duplicates(subset=key_fields, keep="first")
-    duplicates_dropped = initial_count - len(df)
-    
-    # Sort by Track, Race_Date, Race_No, Box
-    # Convert Race_No and Box to numeric for proper sorting
-    df["Race_No_Sort"] = pd.to_numeric(df["Race_No"], errors="coerce")
-    df["Box_Sort"] = pd.to_numeric(df["Box"], errors="coerce")
-    
-    # Convert Race_Date to datetime for proper sorting
-    df["Race_Date_Sort"] = pd.to_datetime(df["Race_Date"], errors="coerce")
-    
-    # Sort
-    df = df.sort_values(
-        by=["Track", "Race_Date_Sort", "Race_No_Sort", "Box_Sort"],
-        na_position="last"
-    )
-    
-    # Drop sort helper columns
-    df = df.drop(columns=["Race_No_Sort", "Box_Sort", "Race_Date_Sort"])
+    if not summary_rows:
+        # Create empty DataFrame with schema
+        df = pd.DataFrame(columns=COLUMN_ORDER)
+    else:
+        # Convert to DataFrame
+        df = pd.DataFrame(summary_rows)
+        
+        # Add aggregate statistics
+        for idx, row in df.iterrows():
+            key = (
+                row.get('Track', ''),
+                row.get('Race_Date', ''),
+                row.get('Race_No', ''),
+                row.get('Box', ''),
+                row.get('Dog_Name', '')
+            )
+            
+            if key in aggregates:
+                agg = aggregates[key]
+                df.at[idx, 'Hist_Count'] = agg.get('Hist_Count', '')
+                df.at[idx, 'Avg_Speed_km/h'] = agg.get('Avg_Speed_km/h', '')
+                df.at[idx, 'Min_Speed_km/h'] = agg.get('Min_Speed_km/h', '')
+                df.at[idx, 'Max_Speed_km/h'] = agg.get('Max_Speed_km/h', '')
+        
+        # Add timestamp
+        timestamp = datetime.now().isoformat()
+        df['Parse_Timestamp'] = timestamp
+        
+        # Ensure all schema columns exist
+        for col in COLUMN_ORDER:
+            if col not in df.columns:
+                df[col] = ''
+        
+        # Reindex to locked schema order
+        df = df.reindex(columns=COLUMN_ORDER, fill_value='')
+        
+        # Remove duplicates
+        key_cols = ['Track', 'Race_Date', 'Race_No', 'Box', 'Dog_Name']
+        duplicates_before = len(df)
+        df = df.drop_duplicates(subset=key_cols, keep='first')
+        duplicates_dropped = duplicates_before - len(df)
+        
+        # Sort by Track, Race_Date, Race_No, Box
+        df['Race_No'] = pd.to_numeric(df['Race_No'], errors='coerce')
+        df['Box'] = pd.to_numeric(df['Box'], errors='coerce')
+        df = df.sort_values(by=['Track', 'Race_Date', 'Race_No', 'Box'], na_position='last')
+        df = df.reset_index(drop=True)
     
     # Export to Excel
-    excel_path = os.path.join(output_dir, "all_dogs_master.xlsx")
-    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="All Data")
+    excel_path = os.path.join(output_dir, 'all_dogs_master.xlsx')
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='All Data')
     
-    # Export to CSV with UTF-8-BOM encoding
-    csv_path = os.path.join(output_dir, "all_dogs_master.csv")
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    # Export to CSV with UTF-8-BOM
+    csv_path = os.path.join(output_dir, 'all_dogs_master.csv')
+    df.to_csv(csv_path, index=False, encoding='utf-8-sig')
     
-    # Compute export stats
-    export_stats = {
-        "total_rows": len(df),
-        "duplicates_dropped": duplicates_dropped,
-        "unique_tracks": df["Track"].nunique(),
-        "unique_meetings": df.groupby(["Track", "Race_Date"]).ngroups if len(df) > 0 else 0,
-        "columns_exported": len(COLUMN_ORDER),
-        "dogs_with_speed_data": len(df[df["Avg_Speed_km/h"] != ""])
-    }
+    print(f"✅ Exported {len(df)} rows to {excel_path} and {csv_path}")
     
-    return excel_path, csv_path, export_stats
+    return df
