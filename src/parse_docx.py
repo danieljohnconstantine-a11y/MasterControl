@@ -108,6 +108,29 @@ def parse_docx_content(extraction_result):
                         if career_match:
                             career_wps = career_match.group(1)
                 
+                # Extract Group B stats (Prize_Money, RTC, DLR, DLW)
+                prize_money = ''
+                rtc = ''
+                dlr = ''
+                dlw = ''
+                
+                # Look for prize money pattern: "$7,234" or "$12,345"
+                for offset2 in range(10, min(15, len(paragraphs) - i)):
+                    detail_para = paragraphs[i + offset2]
+                    # Prize money pattern
+                    money_match = re.search(r'\$\s*(\d{1,3}(?:,\d{3})*)', detail_para)
+                    if money_match and not prize_money:
+                        prize_money = money_match.group(1)
+                    
+                    # RTC, DLR, DLW pattern: numeric values after prize money
+                    # Example: "$7,234        29          6        36"
+                    if prize_money and re.search(r'\$\s*\d+.*?\s+(\d+)\s+(\d+)\s+(\d+)', detail_para):
+                        stats_match = re.search(r'\$\s*\d+.*?\s+(\d+)\s+(\d+)\s+(\d+)', detail_para)
+                        if stats_match:
+                            rtc = stats_match.group(1)
+                            dlr = stats_match.group(2)
+                            dlw = stats_match.group(3)
+                
                 # Store dog details by name for later lookup
                 dog_details[dog_name_para.upper()] = {
                     'trainer': trainer,
@@ -115,6 +138,10 @@ def parse_docx_content(extraction_result):
                     'dam': dam,
                     'owner': owner,
                     'career_wps': career_wps,
+                    'prize_money': prize_money,
+                    'rtc': rtc,
+                    'dlr': dlr,
+                    'dlw': dlw,
                 }
         
         i += 1
@@ -150,10 +177,10 @@ def parse_docx_content(extraction_result):
                     'Dam': details.get('dam', ''),
                     'Owner': details.get('owner', ''),
                     'Career_W-P-S': details.get('career_wps', ''),
-                    'Prize_Money': '',
-                    'RTC': '',
-                    'DLR': '',
-                    'DLW': '',
+                    'Prize_Money': details.get('prize_money', ''),
+                    'RTC': details.get('rtc', ''),
+                    'DLR': details.get('dlr', ''),
+                    'DLW': details.get('dlw', ''),
                     'Data_Source_File': filename,
                 }
                 summary_rows.append(summary_row)
