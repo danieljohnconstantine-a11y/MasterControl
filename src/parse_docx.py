@@ -55,11 +55,71 @@ def parse_docx_content(extraction_result):
             race_no = ""
             break
     
-    # Parse dog entries
+    # Parse dog entries and details
     # Pattern: "1. 13575Paradise Flyer" or "Box. TabDogName"
     # Tab number is 5 digits followed by dog name (letters, spaces, apostrophes, hyphens)
     dog_pattern = re.compile(r'(\d+)\.\s+(\d+)([A-Za-z][A-Za-z\s\'\-]+?)(?=\s+\d+\.|$)')
     
+    # Build lookup: dog_name -> {trainer, sire, dam, owner, career, etc}
+    dog_details = {}
+    
+    i = 0
+    while i < len(paragraphs):
+        para = paragraphs[i]
+        
+        # Find dog number: "1.", "2.", etc. as standalone paragraph
+        if re.match(r'^\d+\.$', para.strip()):
+            box_num = para.strip().rstrip('.')
+            
+            # Next para should be dog name
+            if i + 1 < len(paragraphs):
+                dog_name_para = paragraphs[i + 1].strip()
+                
+                # Extract trainer, sire, dam, owner, career stats from following paragraphs
+                trainer = ""
+                sire = ""
+                dam = ""
+                owner = ""
+                career_wps = ""
+                
+                # Check next 10 paragraphs for details
+                for offset in range(2, min(12, len(paragraphs) - i)):
+                    detail_para = paragraphs[i + offset]
+                    
+                    # Trainer pattern: "0kg (1) bl 2 B\tCOLLEEN PIERSON Horse: 3-5-28 11%-29%"
+                    trainer_match = re.search(r'kg\s+\(\d+\)\s+[a-z]+\s+\d+\s+[A-Z]\s+([A-Z][A-Z\s]+?)\s+(?:Horse|Dog):', detail_para)
+                    if trainer_match:
+                        trainer = trainer_match.group(1).strip()
+                    
+                    # Sire/Dam pattern: "ALLEN DEED (AUS) - BLUE GLITTER (AUS)"
+                    sire_dam_match = re.search(r'([A-Z][A-Z\s]+?)\s+\([A-Z]+\)\s*-\s*([A-Z][A-Z\s]+?)\s+\([A-Z]+\)', detail_para)
+                    if sire_dam_match:
+                        sire = sire_dam_match.group(1).strip()
+                        dam = sire_dam_match.group(2).strip()
+                    
+                    # Owner pattern: "Owner: Pierson Marsigalia Synd S Marsigalia,C Pierson"
+                    owner_match = re.search(r'Owner:\s+(.+)', detail_para)
+                    if owner_match:
+                        owner = owner_match.group(1).strip()
+                    
+                    # Career pattern: "3-5-28" or similar (W-P-S format)
+                    if not career_wps and re.search(r'\b\d+-\d+-\d+\b', detail_para):
+                        career_match = re.search(r'\b(\d+-\d+-\d+)\b', detail_para)
+                        if career_match:
+                            career_wps = career_match.group(1)
+                
+                # Store dog details by name for later lookup
+                dog_details[dog_name_para.upper()] = {
+                    'trainer': trainer,
+                    'sire': sire,
+                    'dam': dam,
+                    'owner': owner,
+                    'career_wps': career_wps,
+                }
+        
+        i += 1
+    
+    # Now parse numbered dog entries and match with details
     for para in paragraphs:
         # Skip header/metadata lines
         if 'Race No' in para or 'Prizemoney' in para or 'Tab\tFF Horse' in para:
@@ -74,7 +134,10 @@ def parse_docx_content(extraction_result):
                 tab_no = match[1]
                 dog_name = match[2].strip()
                 
-                # Create summary row for this dog
+                # Look up details
+                details = dog_details.get(dog_name.upper(), {})
+                
+                # Create summary row for this dog with all fields (empty by default)
                 summary_row = {
                     'Track': track,
                     'Race_Date': race_date,
@@ -82,6 +145,15 @@ def parse_docx_content(extraction_result):
                     'Box': box,
                     'Dog_Name': dog_name,
                     'Tab_No': tab_no,
+                    'Trainer': details.get('trainer', ''),
+                    'Sire': details.get('sire', ''),
+                    'Dam': details.get('dam', ''),
+                    'Owner': details.get('owner', ''),
+                    'Career_W-P-S': details.get('career_wps', ''),
+                    'Prize_Money': '',
+                    'RTC': '',
+                    'DLR': '',
+                    'DLW': '',
                     'Data_Source_File': filename,
                 }
                 summary_rows.append(summary_row)
