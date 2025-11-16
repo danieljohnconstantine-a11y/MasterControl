@@ -108,4 +108,15 @@ COLUMN_ORDER = [
     "Days_Since_Last_Run",
     "Days_Since_Last_Win",
     "Days_Since_Last_Place",
+    # TRACK / DISTANCE STATS
+    "Track_Starts_Total",
+    "Track_Wins",
+    "Track_Places",
+    "Track_Win_Pct",
+    "Track_Place_Pct",
+    "Dist_Starts_Total",
+    "Dist_Wins",
+    "Dist_Places",
+    "Dist_Win_Pct",
+    "Dist_Place_Pct",
 ]
