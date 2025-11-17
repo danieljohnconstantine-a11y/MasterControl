@@ -1,75 +1,73 @@
-import pandas as pd
-import numpy as np
-import pdfplumber
+#!/usr/bin/env python3
+"""
+Main pipeline for DOCX to Excel/CSV extraction.
+Canonical pipeline using modular architecture.
+"""
+import sys
 import os
-from src.parser import parse_race_form
-from src.features import compute_features  # ✅ Enhanced scoring logic
 
-def extract_text_from_pdf(pdf_path):
-    text = ""
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
-    return text
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-# 🚀 Start pipeline
-print("🚀 Starting Greyhound Analytics")
+from src.read_docx import read_all_docx
+from src.parse_docx import parse_all_docx
+from src.aggregate_history import aggregate_history
+from src.export_to_excel import merge_and_export
+from src.validation_and_audit import (
+    write_parse_audit,
+    write_validation_report,
+    write_consistency_check,
+    write_unparsed_lines
+)
 
-# ✅ Find all PDFs in data folder
-pdf_folder = "data"
-pdf_files = [f for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
-pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(pdf_folder, x)), reverse=True)
 
-if not pdf_files:
-    print("❌ No PDF files found in data folder.")
-    exit()
+def main():
+    """Run the complete pipeline."""
+    print("=" * 60)
+    print("DOCX to Excel/CSV Pipeline - Canonical Architecture")
+    print("=" * 60)
+    
+    # Step 1: Read all DOCX files
+    print("\n📖 Step 1: Reading DOCX files...")
+    extraction_results = read_all_docx('data')
+    print(f"   Loaded {len(extraction_results)} DOCX files")
+    
+    # Step 2: Parse into summary and history rows
+    print("\n🔍 Step 2: Parsing dog and history data...")
+    summary_rows, history_rows, unparsed_by_file = parse_all_docx(extraction_results)
+    print(f"   Extracted {len(summary_rows)} summary rows (dogs)")
+    print(f"   Extracted {len(history_rows)} history rows")
+    print(f"   Unparsed lines: {sum(len(v) for v in unparsed_by_file.values())}")
+    
+    # Step 3: Aggregate history data
+    print("\n📊 Step 3: Aggregating speed statistics...")
+    aggregates = aggregate_history(summary_rows, history_rows)
+    dogs_with_speed = len(aggregates)
+    print(f"   Computed speed stats for {dogs_with_speed} dogs")
+    
+    # Step 4: Export to Excel and CSV
+    print("\n💾 Step 4: Exporting to Excel and CSV...")
+    df = merge_and_export(summary_rows, aggregates)
+    
+    # Step 5: Generate validation and audit logs
+    print("\n📝 Step 5: Generating validation and audit logs...")
+    write_parse_audit(len(summary_rows), len(history_rows), unparsed_by_file, len(extraction_results))
+    write_validation_report(df)
+    write_consistency_check(df, len(extraction_results))
+    write_unparsed_lines(unparsed_by_file)
+    
+    print("\n" + "=" * 60)
+    print("✅ Pipeline complete!")
+    print("=" * 60)
+    print(f"\n📁 Outputs:")
+    print(f"   - outputs/all_dogs_master.xlsx ({len(df)} rows)")
+    print(f"   - outputs/all_dogs_master.csv")
+    print(f"   - outputs/logs/parse_audit.txt")
+    print(f"   - outputs/logs/validation_report.txt")
+    print(f"   - outputs/logs/consistency_check.txt")
+    print(f"   - outputs/logs/unparsed.txt")
+    print()
 
-all_dogs = []
 
-# ✅ Process each PDF
-for pdf_file in pdf_files:
-    pdf_path = os.path.join(pdf_folder, pdf_file)
-    print(f"📄 Processing: {pdf_path}")
-    raw_text = extract_text_from_pdf(pdf_path)
-    df = parse_race_form(raw_text)
-
-    # ✅ Convert DLR to numeric to avoid type errors
-    df["DLR"] = pd.to_numeric(df["DLR"], errors="coerce")
-
-    # ✅ Apply enhanced scoring
-    df = compute_features(df)
-    all_dogs.append(df)
-
-# ✅ Combine all dogs
-combined_df = pd.concat(all_dogs, ignore_index=True)
-print(f"🐾 Total dogs parsed: {len(combined_df)}")
-
-# ✅ Save full parsed form
-combined_df.to_csv("outputs/todays_form.csv", index=False)
-print("📄 Saved parsed form → outputs/todays_form.csv")
-
-# ✅ Save ranked dogs
-ranked = combined_df.sort_values(["Track", "RaceNumber", "FinalScore"], ascending=[True, True, False])
-ranked.to_csv("outputs/ranked.csv", index=False)
-print("📊 Saved ranked dogs → outputs/ranked.csv")
-
-# ✅ Save top picks across all tracks
-picks = ranked.groupby(["Track", "RaceNumber"]).head(1).reset_index(drop=True)
-picks = picks.sort_values("FinalScore", ascending=False)
-
-# Reorder columns
-priority_cols = ["Track", "RaceNumber", "Box", "DogName", "FinalScore", "PrizeMoney"]
-remaining_cols = [col for col in picks.columns if col not in priority_cols]
-ordered_cols = priority_cols + remaining_cols
-picks = picks[ordered_cols]
-
-picks.to_csv("outputs/picks.csv", index=False)
-print("🎯 Saved top picks → outputs/picks.csv")
-
-# ✅ Display top picks
-print("\n🏁 Top Picks Across All Tracks:")
-for _, row in picks.iterrows():
-    print(f"{row.Track} | Race {row.RaceNumber} | {row.DogName} | Score: {round(row.FinalScore, 3)}")
-
-print("\n📌 Press Enter to exit...")
-input()
+if __name__ == '__main__':
+    main()
